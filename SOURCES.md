@@ -10,11 +10,13 @@ All data used in this pipeline is publicly available and free to download. No AP
 
 | Field | Value |
 |---|---|
-| URL | https://marinecadastre.gov/downloads/data/ais/ |
+| Interactive tool | https://marinecadastre.gov/accessais/ |
+| Direct file index (2024) | https://coast.noaa.gov/htdata/CMSP/AISDataHandler/2024/index.html |
+| Direct file index (2023) | https://coast.noaa.gov/htdata/CMSP/AISDataHandler/2023/index.html |
 | License | CC0 — Public Domain |
-| Format | GeoParquet / CSV (zipped) |
+| Format | CSV (zipped, one file per day) |
 | Coverage | US coastal waters, 2009–2024 |
-| Volume | ~820M messages per area |
+| Total size (2024) | ~116.7 GB uncompressed |
 | Update frequency | Annual |
 
 **Schema — key columns:**
@@ -38,12 +40,13 @@ All data used in this pipeline is publicly available and free to download. No AP
 | `Draft` | Vessel draft (meters) |
 | `Cargo` | Cargo type code |
 
-**Download tips:**
-- Start with 1–2 months for a single UTM zone to keep volume manageable (~2–5 GB compressed)
-- High-interest areas: Zone 19 (US East Coast), Zone 10 (US West Coast)
-- Files are named by year, month, and UTM zone: `AIS_2024_01_Zone19.zip`
+Data dictionary (official): https://coast.noaa.gov/data/marinecadastre/ais/data-dictionary.pdf
 
-**Direct download index:** https://coast.noaa.gov/htdata/CMSP/AISDataHandler/2024/index.html
+**Download tips:**
+- **Interactive (recommended for small areas):** Use the [AccessAIS tool](https://marinecadastre.gov/accessais/) to clip by geography and time range — avoids downloading the full daily files
+- **Direct bulk download:** Files follow the pattern `AIS_2024_MM_DD.zip` from the index pages above
+- Start with 1–2 months for a single coastal zone to keep volume manageable (~2–5 GB compressed)
+- Note: direct download links from the tool expire after 5 accesses or 14 days
 
 ---
 
@@ -53,25 +56,31 @@ All data used in this pipeline is publicly available and free to download. No AP
 
 | Field | Value |
 |---|---|
-| URL | https://opensanctions.org |
-| Bulk data | https://data.opensanctions.org/datasets/default/entities.ftm.json |
-| License | CC BY 4.0 (attribution required) |
-| Format | JSON (FollowTheMoney schema) / CSV |
+| Homepage | https://opensanctions.org |
+| Bulk data docs | https://www.opensanctions.org/docs/bulk/ |
+| License | CC BY 4.0 (attribution required; non-commercial free) |
+| Format | JSON (FollowTheMoney schema), CSV, Parquet |
 | Coverage | OFAC, EU, UN, UK OFSI, and 40+ other lists |
 | Update frequency | Daily |
+| Total entities | 2.1M+ across 333 sources |
 
 **Relevant entity types for this pipeline:**
-- `Vessel` — sanctioned ships (filter by `schema: Vessel`)
+- `Vessel` — sanctioned ships
 - `Company` — sanctioned companies that may own vessels
 - `Person` — sanctioned individuals linked to vessel ownership
 
-**Simple filtered download (vessels only):**
+**Download (vessels filtered):**
 ```bash
+# Full default dataset (2.1M entities, ~1 GB)
 curl -L "https://data.opensanctions.org/datasets/default/entities.ftm.json" \
-  | jq 'select(.schema == "Vessel")' > sanctioned_vessels.jsonl
+  -o opensanctions_default.jsonl
+
+# Filter vessels locally
+grep '"schema":"Vessel"' opensanctions_default.jsonl > sanctioned_vessels.jsonl
 ```
 
-**Alternative — pre-filtered CSVs:** https://www.opensanctions.org/docs/bulk/
+**Parquet alternative (easier for Databricks):**
+Check https://www.opensanctions.org/docs/bulk/ for the latest Parquet/CSV endpoints — these load directly into a Databricks table with `spark.read.parquet(...)`.
 
 ---
 
@@ -81,40 +90,41 @@ curl -L "https://data.opensanctions.org/datasets/default/entities.ftm.json" \
 
 | Field | Value |
 |---|---|
-| URL | https://gisis.imo.org/Public/Ships/Default.aspx |
-| License | Public lookup — no bulk download available |
-| Format | Web lookup / manual export |
+| URL | https://gisis.imo.org |
+| License | Public (free registration required) |
+| Format | Web lookup only — no bulk download |
 | Coverage | Global |
 
-**Alternative bulk source — ITU MARS database:**
-- URL: https://www.itu.int/en/ITU-R/terrestrial/mars/Pages/default.aspx
-- Contains MMSI-to-vessel-name mappings (official ITU registry)
+**Note:** GISIS now requires account registration even for basic vessel lookups. For automated bulk MMSI resolution, the alternatives below are more practical.
 
-**Practical note:** For bulk MMSI resolution, the community-maintained dataset at https://www.mmsispace.com or the `aisdb` Python package (https://github.com/AISViz/AISdb) are more usable than GISIS for automated pipelines.
+**Practical alternative — ITU MARS (List V):**
+- URL: https://www.itu.int/en/ITU-R/terrestrial/mars/Pages/default.aspx
+- Contains official MMSI assignments from national administrations (~1M ship stations)
+- Online search only; bulk export requires ITU membership or data agreement
+
+**Community alternative — AISdb:**
+- Python package: https://github.com/AISViz/AISdb
+- Includes MMSI-to-vessel metadata resolution utilities
 
 ---
 
 ## 4. Supporting / Optional Sources
 
-### Synthetic spoofing dataset (for model testing)
+### Synthetic spoofing dataset (for model testing without waiting for confirmed real events)
 - **Agrebi — Synthetic GPS Spoofing Dataset for MASS** (IEEE DataPort, 2025)
-- URL: https://ieee-dataport.org (search "GPS spoofing AIS MASS Agrebi")
-- Useful for testing the IMM Kalman Filter without waiting for confirmed real-world spoofing events
+- Search "GPS spoofing AIS MASS Agrebi" on https://ieee-dataport.org
+- Useful for testing the IMM Kalman Filter against known spoofing patterns
 
-### Global AIS via AISHub (near-real-time)
+### AISHub — near-real-time global AIS feed
 - URL: https://www.aishub.net
 - Free for non-commercial use with registration
 - Useful for live validation once the batch pipeline is stable
-
-### VesselFinder historical data (paid)
-- URL: https://www.vesselfinder.com/historical-ais-data
-- Commercial — not required for this project but useful reference for validation
 
 ---
 
 ## Download Checklist for v1
 
-- [ ] 2 months of NOAA AIS for Zone 19 (US East Coast) — ~4 GB
-- [ ] OpenSanctions bulk export (vessels) — ~50 MB
-- [ ] ITU MARS MMSI registry — ~10 MB
+- [ ] AIS data: 2 months via [AccessAIS](https://marinecadastre.gov/accessais/) for a specific coastal zone (~4 GB)
+- [ ] OpenSanctions bulk export (vessels filtered) — ~50 MB
 - [ ] Place all raw files under `data/raw/` before running the ingestion pipeline
+- [ ] Upload to Azure Data Lake Storage Gen2 (`abfss://raw@<storage-account>.dfs.core.windows.net/ais/`)
