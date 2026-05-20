@@ -86,10 +86,16 @@ See [`SOURCES.md`](SOURCES.md) for detailed download instructions and direct lin
 ```bash
 git clone https://github.com/simolima/ais-anomaly-pipeline
 cd ais-anomaly-pipeline
+
+# Create and activate virtual environment
+python3 -m venv .venv
+source .venv/bin/activate   # Windows: .venv\Scripts\Activate.ps1
+
 pip install -r requirements.txt
+cp .env.example .env        # fill in your credentials
 ```
 
-Full setup guide in [`docs/setup.md`](docs/setup.md) — coming soon.
+Full setup guide (Databricks, dbt, Superset, Gmail alerts): [`docs/setup.md`](docs/setup.md)
 
 ---
 

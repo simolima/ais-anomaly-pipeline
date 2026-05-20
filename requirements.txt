@@ -1,0 +1,22 @@
+# ── dbt ───────────────────────────────────────────────────────────────────────
+dbt-databricks>=1.8.0
+
+# ── Data processing (local dev & notebooks) ───────────────────────────────────
+# PySpark is pre-installed on Databricks — do NOT pip install it on the cluster.
+# Install it only in your local .venv for IDE support and offline testing.
+pyspark>=3.5.0
+pandas>=2.2.0
+pyarrow>=17.0.0
+numpy>=2.0.0
+
+# ── ML ────────────────────────────────────────────────────────────────────────
+scikit-learn>=1.5.0
+
+# ── Geospatial ────────────────────────────────────────────────────────────────
+geopy>=2.4.0
+
+# ── HTTP / APIs ───────────────────────────────────────────────────────────────
+requests>=2.32.0
+
+# ── Environment & config ──────────────────────────────────────────────────────
+python-dotenv>=1.0.0

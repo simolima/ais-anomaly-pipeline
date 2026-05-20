@@ -1,0 +1,31 @@
+version: 2
+
+sources:
+  - name: bronze
+    schema: bronze
+    tables:
+      - name: ais_raw
+        description: Raw AIS broadcast points from NOAA MarineCadastre (CC0)
+        columns:
+          - name: MMSI
+            description: Maritime Mobile Service Identity
+          - name: BaseDateTime
+            description: UTC timestamp of the AIS broadcast
+          - name: LAT
+          - name: LON
+          - name: SOG
+            description: Speed Over Ground (knots)
+          - name: COG
+            description: Course Over Ground (degrees)
+          - name: VesselName
+          - name: IMO
+          - name: VesselType
+
+      - name: sanctions
+        description: Sanctioned vessel entities from OpenSanctions
+        columns:
+          - name: mmsi
+          - name: imo_number
+          - name: entity_name
+          - name: sanctions_list
+          - name: designation_date
