@@ -1,23 +1,43 @@
 # Data Sources
 
-All data used in this pipeline is publicly available and free to download. No API keys or paid subscriptions required.
+All data is ingested programmatically — no manual downloads required.
 
 ---
 
 ## 1. NOAA MarineCadastre — US Coast Guard AIS
 
-**The primary dataset.**
+**The primary dataset. Public Azure Blob Storage, no authentication required.**
 
 | Field | Value |
 |---|---|
-| Interactive tool | https://marinecadastre.gov/accessais/ |
-| Direct file index (2024) | https://coast.noaa.gov/htdata/CMSP/AISDataHandler/2024/index.html |
-| Direct file index (2023) | https://coast.noaa.gov/htdata/CMSP/AISDataHandler/2023/index.html |
+| Daily GeoParquet (2024) | `https://ocmgeodatastor1.blob.core.windows.net/marinecadastre/ais2024/` |
+| Monthly vessel tracks (2024–2025) | `https://ocmgeodatastor1.blob.core.windows.net/marinecadastre/aistrack/` |
+| Bulk index (all years, CSV) | https://coast.noaa.gov/htdata/CMSP/AISDataHandler/2024/index.html |
+| Interactive clip tool | https://marinecadastre.gov/accessais/ |
 | License | CC0 — Public Domain |
-| Format | CSV (zipped, one file per day) |
-| Coverage | US coastal waters, 2009–2024 |
-| Total size (2024) | ~116.7 GB uncompressed |
-| Update frequency | Annual |
+| Format | GeoParquet (preferred) or CSV |
+| Coverage | US coastal waters, 2009–2025 |
+
+**Programmatic download (Python):**
+
+```python
+import requests
+
+# Example: first day of January 2024
+url = "https://ocmgeodatastor1.blob.core.windows.net/marinecadastre/ais2024/AIS_2024_01_01.parquet"
+r = requests.get(url)
+with open("AIS_2024_01_01.parquet", "wb") as f:
+    f.write(r.content)
+```
+
+**Or directly into a Databricks notebook:**
+
+```python
+df = spark.read.parquet(
+    "https://ocmgeodatastor1.blob.core.windows.net/marinecadastre/ais2024/AIS_2024_01_01.parquet"
+)
+df.write.format("delta").mode("append").save("/mnt/bronze/ais_raw")
+```
 
 **Schema — key columns:**
 
@@ -37,94 +57,86 @@ All data used in this pipeline is publicly available and free to download. No AP
 | `Status` | Navigational status |
 | `Length` | Vessel length (meters) |
 | `Width` | Vessel beam (meters) |
-| `Draft` | Vessel draft (meters) |
-| `Cargo` | Cargo type code |
 
-Data dictionary (official): https://coast.noaa.gov/data/marinecadastre/ais/data-dictionary.pdf
-
-**Download tips:**
-- **Interactive (recommended for small areas):** Use the [AccessAIS tool](https://marinecadastre.gov/accessais/) to clip by geography and time range — avoids downloading the full daily files
-- **Direct bulk download:** Files follow the pattern `AIS_2024_MM_DD.zip` from the index pages above
-- Start with 1–2 months for a single coastal zone to keep volume manageable (~2–5 GB compressed)
-- Note: direct download links from the tool expire after 5 accesses or 14 days
+Official data dictionary: https://coast.noaa.gov/data/marinecadastre/ais/data-dictionary.pdf
 
 ---
 
 ## 2. OpenSanctions
 
-**For sanctions correlation — joins with MMSI / IMO to flag sanctioned vessels and owners.**
+**For sanctions correlation — REST API, free for non-commercial and academic use.**
 
 | Field | Value |
 |---|---|
 | Homepage | https://opensanctions.org |
+| API docs | https://www.opensanctions.org/docs/api/ |
 | Bulk data docs | https://www.opensanctions.org/docs/bulk/ |
-| License | CC BY 4.0 (attribution required; non-commercial free) |
-| Format | JSON (FollowTheMoney schema), CSV, Parquet |
-| Coverage | OFAC, EU, UN, UK OFSI, and 40+ other lists |
+| License | CC BY 4.0 (free for non-commercial / academic) |
+| API key | Free — register at https://www.opensanctions.org/api/ |
 | Update frequency | Daily |
-| Total entities | 2.1M+ across 333 sources |
 
-**Relevant entity types for this pipeline:**
-- `Vessel` — sanctioned ships
-- `Company` — sanctioned companies that may own vessels
-- `Person` — sanctioned individuals linked to vessel ownership
+**API — match a vessel by name or IMO:**
 
-**Download (vessels filtered):**
-```bash
-# Full default dataset (2.1M entities, ~1 GB)
-curl -L "https://data.opensanctions.org/datasets/default/entities.ftm.json" \
-  -o opensanctions_default.jsonl
+```python
+import requests
 
-# Filter vessels locally
-grep '"schema":"Vessel"' opensanctions_default.jsonl > sanctioned_vessels.jsonl
+headers = {"Authorization": "ApiKey YOUR_FREE_KEY"}
+
+# Search for a vessel by name
+r = requests.get(
+    "https://api.opensanctions.org/search/default",
+    params={"q": "VESSEL_NAME", "schema": "Vessel"},
+    headers=headers
+)
+results = r.json()["results"]
 ```
 
-**Parquet alternative (easier for Databricks):**
-Check https://www.opensanctions.org/docs/bulk/ for the latest Parquet/CSV endpoints — these load directly into a Databricks table with `spark.read.parquet(...)`.
+**Bulk download (no API key needed) — filter for vessels:**
+
+```python
+import requests, json
+
+url = "https://data.opensanctions.org/datasets/default/entities.ftm.json"
+with requests.get(url, stream=True) as r:
+    for line in r.iter_lines():
+        entity = json.loads(line)
+        if entity.get("schema") == "Vessel":
+            # process sanctioned vessel
+            pass
+```
+
+**Load directly into Databricks:**
+
+```python
+# Parquet endpoint (check opensanctions.org/docs/bulk/ for latest URL)
+df = spark.read.parquet("https://data.opensanctions.org/datasets/default/vessels.parquet")
+df.write.format("delta").mode("overwrite").save("/mnt/bronze/sanctions")
+```
 
 ---
 
-## 3. IMO GISIS — Global Integrated Shipping Information System
+## 3. IMO Ship Registry (GISIS)
 
-**For vessel identity enrichment — cross-reference MMSI with IMO numbers, flag state, and owner.**
+**For cross-referencing MMSI with official IMO numbers and flag state.**
 
 | Field | Value |
 |---|---|
 | URL | https://gisis.imo.org |
-| License | Public (free registration required) |
-| Format | Web lookup only — no bulk download |
-| Coverage | Global |
+| License | Free with registration |
+| Format | Web lookup only — no bulk API |
 
-**Note:** GISIS now requires account registration even for basic vessel lookups. For automated bulk MMSI resolution, the alternatives below are more practical.
+**Practical alternative — AISdb (Python):**
 
-**Practical alternative — ITU MARS (List V):**
-- URL: https://www.itu.int/en/ITU-R/terrestrial/mars/Pages/default.aspx
-- Contains official MMSI assignments from national administrations (~1M ship stations)
-- Online search only; bulk export requires ITU membership or data agreement
+```bash
+pip install aisdb
+```
 
-**Community alternative — AISdb:**
-- Python package: https://github.com/AISViz/AISdb
-- Includes MMSI-to-vessel metadata resolution utilities
+The `aisdb` package includes MMSI-to-vessel metadata resolution utilities that work without GISIS access. See https://github.com/AISViz/AISdb.
 
 ---
 
-## 4. Supporting / Optional Sources
+## Ingestion checklist for v1
 
-### Synthetic spoofing dataset (for model testing without waiting for confirmed real events)
-- **Agrebi — Synthetic GPS Spoofing Dataset for MASS** (IEEE DataPort, 2025)
-- Search "GPS spoofing AIS MASS Agrebi" on https://ieee-dataport.org
-- Useful for testing the IMM Kalman Filter against known spoofing patterns
-
-### AISHub — near-real-time global AIS feed
-- URL: https://www.aishub.net
-- Free for non-commercial use with registration
-- Useful for live validation once the batch pipeline is stable
-
----
-
-## Download Checklist for v1
-
-- [ ] AIS data: 2 months via [AccessAIS](https://marinecadastre.gov/accessais/) for a specific coastal zone (~4 GB)
-- [ ] OpenSanctions bulk export (vessels filtered) — ~50 MB
-- [ ] Place all raw files under `data/raw/` before running the ingestion pipeline
-- [ ] Upload to Azure Data Lake Storage Gen2 (`abfss://raw@<storage-account>.dfs.core.windows.net/ais/`)
+- [ ] Run ingestion script: pulls 2 months of GeoParquet from NOAA blob → Bronze Delta table
+- [ ] Run OpenSanctions sync: API or bulk download → Bronze Delta table
+- [ ] Verify row counts and schema in Databricks notebook before running Silver transforms

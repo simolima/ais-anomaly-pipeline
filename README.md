@@ -8,7 +8,7 @@
 
 A reproducible data engineering and ML pipeline that detects suspicious vessel behavior in AIS (Automatic Identification System) data — dark gaps, impossible speeds, and GPS spoofing — and correlates findings with public sanctions lists.
 
-Built on public data and open-source tooling. No proprietary APIs required.
+Built on public data and open-source tooling. Data is ingested programmatically via public endpoints — no manual downloads, no proprietary APIs required.
 
 ---
 
@@ -34,9 +34,9 @@ This project fills that gap.
 
 ```
 SOURCES
-  US Coast Guard AIS (NOAA/MarineCadastre) ─┐
-  OpenSanctions ─────────────────────────────┼──▶ Bronze (Delta Lake on ADLS Gen2)
-  IMO Ship Registry ─────────────────────────┘
+  US Coast Guard AIS — public Azure Blob (GeoParquet) ─┐
+  OpenSanctions — REST API (free, non-commercial) ──────┼──▶ Bronze (Delta Lake)
+  IMO Ship Registry ───────────────────────────────────┘
 
 PROCESSING (dbt + Databricks)
   Silver: cleaned trajectories + artifact removal (MMSI duplicates, retransmissions)
@@ -58,9 +58,8 @@ DASHBOARD (Apache Superset)
 
 | Layer | Technology |
 |---|---|
-| Cloud platform | Microsoft Azure |
-| Storage | Azure Data Lake Storage Gen2 (ADLS Gen2) |
-| Lakehouse / compute | Azure Databricks (Delta Lake Bronze / Silver / Gold) |
+| Cloud platform | Azure Databricks (Free Edition) |
+| Lakehouse / compute | Delta Lake (Bronze / Silver / Gold) |
 | Transforms | dbt (dbt-databricks connector) |
 | Orchestration | Azure Databricks Workflows |
 | ML tracking | MLflow (managed, built into Databricks) |
@@ -74,7 +73,7 @@ DASHBOARD (Apache Superset)
 
 | Source | License | Coverage |
 |---|---|---|
-| [NOAA MarineCadastre AIS](https://marinecadastre.gov/accessais/) | CC0 — public domain | US coastal waters, 2009–2024 |
+| [NOAA MarineCadastre AIS](https://ocmgeodatastor1.blob.core.windows.net/marinecadastre/ais2024/) | CC0 — public domain | US coastal waters, 2009–2025 |
 | [OpenSanctions](https://opensanctions.org) | CC BY 4.0 | Continuously updated |
 | [IMO Ship Registry](https://gisis.imo.org) | Public (registration required) | Global |
 
