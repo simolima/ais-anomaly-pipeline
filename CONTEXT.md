@@ -17,15 +17,17 @@ The enforcement picture is fragmented. Regulators (OFAC, EU, UK OFSI) have expli
 
 ---
 
-## 2. How AIS Works — and Why It Breaks
+## 2. How AIS Works — and Why It Is Fundamentally Vulnerable
 
-The Automatic Identification System (AIS) is a maritime safety protocol, not a surveillance system. Vessels above a certain tonnage are legally required to broadcast their MMSI (Maritime Mobile Service Identity), position, speed, and course at regular intervals — every 2–10 seconds when moving, every 3 minutes at anchor.
+AIS (Automatic Identification System) is a radio system mandated by international law (SOLAS convention) on all commercial vessels above 300 gross tonnes. Every transponder automatically broadcasts a packet every few seconds containing: identity (MMSI, vessel name, IMO number), position (GPS coordinates), movement (speed, course, heading), and vessel type.
 
-The fundamental design flaw is that AIS is a **self-reported, unverified system**. There is no external authority validating that the position a vessel broadcasts corresponds to where it actually is. The signal is received by:
-- Coastal VHF receivers (range ~40–60 km)
-- Satellite AIS (S-AIS) receivers in low Earth orbit
+Shore-based receivers — coastal stations, satellites in low Earth orbit, other vessels — capture these signals and aggregate them. The result is a near-real-time global map of commercial maritime traffic. It is the backbone of port authorities, compliance systems, marine insurers, and commodity traders tracking tankers.
 
-Satellite coverage has improved dramatically, but gaps remain in open ocean areas and congested reception zones where signals from thousands of vessels collide.
+**The fundamental flaw: AIS was designed for navigational safety, not identification.**
+
+The transponder transmits whatever it is told to transmit. There is no authentication, no cryptographic signature, no external verification of coordinates. A vessel can program its transponder with any MMSI, any name, any position. The system trusts blindly what it receives.
+
+This makes it intrinsically vulnerable to three categories of manipulation.
 
 ---
 
@@ -33,40 +35,46 @@ Satellite coverage has improved dramatically, but gaps remain in open ocean area
 
 ### 3.1 Dark Gap (Transponder Shutdown)
 
-The simplest form of evasion: the crew manually disables the AIS transponder. The vessel disappears from tracking entirely. When it reappears, it may be hundreds of miles from its last known position, with no voyage record in between.
+The vessel simply switches off the transponder. It vanishes from all tracking for hours or days, conducts whatever it needs to conduct — a ship-to-ship oil transfer, entry into a sanctioned port, an arms delivery — then reappears elsewhere as if nothing happened.
 
-Detection is straightforward in principle — compute the time delta between consecutive messages for each MMSI — but requires careful separation from legitimate causes of signal loss: VHF dead zones, satellite coverage gaps, receiver overload in congested areas, and equipment failures.
+The detection challenge is that not every gap is illicit. Technical failures, areas with poor receiver coverage, and inland waterways where AIS is not mandatory all generate innocent gaps. Distinguishing a deliberate shutdown from a technical outage requires contextual analysis: how long the gap lasts, where it occurs, and whether multiple vessels disappear simultaneously in the same area (a strong indicator of area-wide jamming rather than individual evasion).
 
-Key statistical finding from industry reports: dark gaps concentrated near known ship-to-ship (STS) transfer zones in the Strait of Gibraltar, Laconian Gulf (Greece), and Lamu (Kenya) correlate strongly with sanctions-linked cargo transfers.
+Key statistical finding: dark gaps concentrated near known ship-to-ship (STS) transfer zones in the Strait of Gibraltar, Laconian Gulf (Greece), and Lamu (Kenya) correlate strongly with sanctions-linked cargo transfers.
 
 ### 3.2 Impossible Speed (Kinematic Inconsistency)
 
-After a dark gap, a vessel reappears at a position that would have required physically impossible speeds to reach from its last known location — often exceeding 50–100 knots for a cargo tanker whose real maximum is 14–16 knots.
+A variant of the dark gap. The vessel disappears, physically relocates, then reappears. But the delta between the last known position and the new position, divided by elapsed time, implies a speed no commercial vessel can physically achieve — 40, 60, 100 knots, when the realistic maximum for a cargo vessel is 25–30 knots. The signal is almost always unambiguous: the vessel moved while "switched off", and the distance betrays the actual displacement.
 
-This anomaly can also arise without a gap: a vessel broadcasts a spoofed position far from its actual location, creating an apparent "jump" in the trajectory. The detection criterion is simple (implied speed = distance / time > physical threshold), but distinguishing intentional spoofing from sensor artifacts and MMSI collisions requires the data quality work described in Section 5.
+This anomaly can also appear without a gap: a vessel broadcasts a spoofed position far from its real location, creating an apparent trajectory jump. The detection criterion is simple (implied speed = distance / time > physical threshold), but separating intentional spoofing from sensor artifacts and MMSI collisions requires the data quality work described in Section 5.
 
 ### 3.3 AIS Spoofing (Active Position Falsification)
 
-Spoofing is qualitatively different from going dark: the vessel's AIS transponder actively broadcasts false coordinates. As Kpler's 2025 analysis describes, this is always intentional — it requires either manual entry of incorrect position data or software that manipulates the GPS feed into the AIS transponder.
+The most sophisticated form. The vessel does not switch off — it keeps broadcasting regularly — but transmits fabricated GPS coordinates. The transponder reports "I am in the port of Rotterdam" while the vessel is physically in the Arabian Gulf conducting an unauthorized transfer. To a naive monitoring system, the vessel looks clean: it is transmitting, it is in a legitimate port, everything appears normal.
 
-Common spoofing patterns documented in industry reports include:
-- **Port spoofing**: broadcasting a position inside a legitimate port while conducting STS transfers at sea
-- **Circle spoofing**: transmitting positions that trace a perfect circle (a hardware artifact of certain spoofing devices)
-- **Historical location replay**: looping a previous legitimate voyage track while the vessel deviates
+Detection requires internal consistency checks: the transmitted coordinates must be compared against the physics of the prior trajectory (an IMM Kalman filter predicts where the vessel should be given its real kinematics), against the declared positions of nearby vessels (if twenty ships suddenly all report being at the same point, something is wrong), and against satellite imagery when available.
 
-The Kpler report notes that detection is technically faster than for dark gaps: when a vessel's AIS position contradicts satellite imagery or shows kinematically impossible movements, automated systems can flag the anomaly within hours.
+Common spoofing patterns documented in industry reports:
+- **Port spoofing**: declaring a position inside a legitimate port while conducting STS transfers at sea
+- **Circle spoofing**: positions that trace a geometrically perfect circle — a hardware artifact of certain spoofing devices
+- **Historical replay**: looping a previous legitimate voyage track while the vessel deviates from it
 
 ---
 
-## 4. Geopolitical Context
+## 4. Why This Has Industrialised — Geopolitical Context
 
-The acceleration of AIS manipulation is not random. Windward's analysis shows that 91% of sanctions-related dark activities in 2025 were tied to Russia- and Iran-aligned fleets. The motivations are clear:
+Until a few years ago, AIS manipulation was rare and artisanal. Three factors have industrialised it.
 
-**Russia**: Since the February 2022 invasion of Ukraine, a parallel logistics infrastructure has been constructed to move Russian crude outside the price cap and sanctions regime. Tankers disable AIS before entering known STS hotspots and reappear with implausible voyage histories. GPS jamming in the Baltic and Black Sea has a dual purpose: protecting military assets from Ukrainian drone strikes and obscuring commercial vessel movements.
+**Post-2022 Russia sanctions** created a shadow fleet of hundreds of vessels moving Russian crude outside Western price caps and sanctions regimes. These vessels have an enormous economic incentive to become invisible. Windward's analysis shows that 91% of sanctions-related dark activities in 2025 were tied to Russia- and Iran-aligned fleets.
 
-**Iran**: OFAC's April 2025 guidance specifically addresses Iranian oil sanctions evasion, documenting the use of multiple STS transfers in a single shipment to obscure cargo origin, combined with falsified documents and AIS manipulation.
+**Military GPS jamming** in the Baltic and Middle East — begun as a countermeasure against Ukrainian drones — normalised GPS signal manipulation across entire geographic areas. Commercial vessels became collateral damage, but opportunistic beneficiaries as well: jamming provides plausible cover for AIS anomalies that would otherwise be immediately suspicious.
 
-**Structural enablers**: Flag-hopping reached unprecedented levels in 2025. False-flag vessels accounted for 29% of the dark fleet. New fraudulent registries operate with minimal oversight, providing legal cover (however thin) for vessels that would otherwise be stateless.
+**Accessible hardware**: the market for modified AIS transponders has matured. State-level resources are no longer required to falsify a signal.
+
+The result: GPS jamming incidents surged 510% between Q1 and Q3 2025, with over 11,600 vessels affected in Q3 alone. The dark fleet reached over 1,900 active tankers. False-flag registrations surged across 18 jurisdictions. By year-end 2025, 76% of Windward's tracked dark fleet crude tankers had been formally sanctioned — but the manipulation preceded the designation, often by months.
+
+**Iran**: OFAC's April 2025 guidance specifically addresses Iranian oil sanctions evasion, documenting multiple sequential STS transfers in a single shipment to obscure cargo origin, combined with falsified documents and AIS manipulation.
+
+**Structural enabler**: Flag-hopping reached unprecedented levels. False-flag vessels accounted for 29% of the dark fleet. New fraudulent registries operate with minimal oversight across jurisdictions including Tonga, Mozambique, Angola, and Gambia.
 
 ---
 
