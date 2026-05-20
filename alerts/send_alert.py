@@ -1,11 +1,14 @@
 # Databricks notebook — schedule daily via Databricks Workflows
-# Reads high-confidence anomalies from gold.vessel_risk_scores → sends email alert
+# Reads high-confidence anomalies from gold.vessel_risk_scores,
+# generates an AI narrative brief via Claude, then sends it by email.
 
 import os
 import smtplib
 from datetime import date
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+
+import anthropic
 from pyspark.sql import SparkSession
 
 spark = SparkSession.builder.getOrCreate()
@@ -27,58 +30,104 @@ if df.empty:
     print("No high-confidence anomalies today — no alert sent.")
     raise SystemExit(0)
 
-# ── Build recommended action per anomaly type ──────────────────────────────────
-def recommend_action(row) -> str:
-    if row.get("sanctions_match"):
-        return "Flag for OFAC / EU reporting"
-    if row["anomaly_type"] == "impossible_speed":
-        return "Cross-reference with satellite imagery"
-    if row["anomaly_type"] == "dark_gap":
-        return "Alert port authority at next declared port of call"
-    return "Flag for manual review"
+# ── Build per-row context for Claude ──────────────────────────────────────────
+def anomaly_context_line(row) -> str:
+    sanctions = f"SANCTIONS MATCH: {row['sanctions_match']}" if row.get("sanctions_match") else "no sanctions match"
+    return (
+        f"- Vessel: {row['VesselName']} (MMSI {row['MMSI']}) | "
+        f"Type: {row['anomaly_type'].replace('_', ' ').upper()} | "
+        f"Score: {row['anomaly_score']:.2f} | "
+        f"Position: {row['lat']:.4f}°N {row['lon']:.4f}°E | "
+        f"{sanctions}"
+    )
 
-# ── Build HTML email body ──────────────────────────────────────────────────────
-def build_html(rows) -> str:
-    table_rows = ""
-    for _, r in rows.iterrows():
-        match = f"⚠ {r['sanctions_match']}" if r.get("sanctions_match") else "—"
-        action = recommend_action(r)
-        table_rows += f"""
-        <tr>
-          <td><b>{r['VesselName']}</b><br><small>MMSI: {r['MMSI']}</small></td>
-          <td>{r['anomaly_type'].replace('_', ' ').title()}</td>
-          <td>{r['anomaly_score']:.2f}</td>
-          <td>{match}</td>
-          <td><i>{action}</i></td>
-        </tr>"""
+anomaly_lines = "\n".join(anomaly_context_line(r) for _, r in df.iterrows())
 
+user_prompt = f"""Date: {date.today()}
+Anomalies detected in the last 24 hours ({len(df)} total):
+
+{anomaly_lines}
+
+Write the intelligence brief now."""
+
+# ── Call Claude with a cached system prompt ────────────────────────────────────
+SYSTEM_PROMPT = """You are a senior maritime intelligence analyst producing daily operational briefs for a NATO maritime situational awareness cell.
+
+Your briefs are read by flag officers and policy staff. Write with precision and economy — no filler, no hedging. Every sentence must earn its place.
+
+For each anomaly batch you receive, produce a structured brief with these sections:
+
+EXECUTIVE SUMMARY
+One or two sentences: how many vessels flagged, the dominant threat pattern, and whether any sanctions-listed entities are implicated.
+
+VESSEL-BY-VESSEL ASSESSMENT
+For each vessel: state the anomaly type, what it physically implies (e.g., transponder shutdown in a congested lane suggests deliberate concealment), and one recommended action. Flag vessels with sanctions matches with ⚠ PRIORITY.
+
+Recommended actions should be specific and operational:
+- Sanctions match → "Flag for OFAC/EU reporting and request port-state inspection at next declared call"
+- Impossible speed → "Cross-reference with satellite SAR imagery for the implied transit corridor; request LRIT data from flag state"
+- Dark gap → "Alert port authority at next declared port of call; cross-check with alternative tracking sources (satellite AIS, LRIT)"
+- Multiple anomaly types on one MMSI → escalate: "Refer to national maritime intelligence agency for full OSINT package"
+
+THREAT LEVEL ASSESSMENT
+Rate the overall batch: ROUTINE / ELEVATED / HIGH. Justify in one sentence.
+
+Write in plain English. No markdown headers with hashes — use CAPS for section titles. No bullet points in the executive summary."""
+
+client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+
+response = client.messages.create(
+    model="claude-sonnet-4-6",
+    max_tokens=1500,
+    system=[
+        {
+            "type": "text",
+            "text": SYSTEM_PROMPT,
+            "cache_control": {"type": "ephemeral"},  # cache the stable system prompt
+        }
+    ],
+    messages=[{"role": "user", "content": user_prompt}],
+)
+
+brief_text = response.content[0].text
+
+cache_hits = getattr(response.usage, "cache_read_input_tokens", 0)
+print(f"Claude brief generated — cache_read_input_tokens: {cache_hits}")
+
+# ── Build plain-text + HTML email ─────────────────────────────────────────────
+def build_html(brief: str) -> str:
+    escaped = brief.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    paragraphs = "".join(
+        f"<p>{line}</p>" if line.strip() else "<br>"
+        for line in escaped.splitlines()
+    )
     return f"""
-    <html><body style="font-family:sans-serif">
-      <h2 style="color:#b30000">Maritime Anomaly Alert — {date.today()}</h2>
-      <p>{len(rows)} high-confidence anomal{'y' if len(rows)==1 else 'ies'} detected (last 24 h).</p>
-      <table border="1" cellpadding="6" style="border-collapse:collapse;font-size:14px">
-        <tr style="background:#f0f0f0;font-weight:bold">
-          <td>Vessel</td><td>Anomaly</td><td>Score</td>
-          <td>Sanctions</td><td>Recommended action</td>
-        </tr>
-        {table_rows}
-      </table>
+    <html><body style="font-family:sans-serif;max-width:720px;margin:auto">
+      <h2 style="color:#b30000">Maritime Intelligence Brief — {date.today()}</h2>
+      <p style="color:#666;font-size:13px">
+        {len(df)} anomal{'y' if len(df)==1 else 'ies'} above threshold {SCORE_THRESHOLD} · Generated by Claude AI
+      </p>
+      <hr>
+      <div style="font-size:15px;line-height:1.7;white-space:pre-wrap">{paragraphs}</div>
     </body></html>
     """
 
 # ── Send via Gmail SMTP ────────────────────────────────────────────────────────
-sender   = os.environ["ALERT_EMAIL_FROM"]
-password = os.environ["ALERT_EMAIL_PASSWORD"]
+sender    = os.environ["ALERT_EMAIL_FROM"]
+password  = os.environ["ALERT_EMAIL_PASSWORD"]
 recipient = os.environ["ALERT_EMAIL_TO"]
 
 msg = MIMEMultipart("alternative")
-msg["Subject"] = f"[AIS Alert] {len(df)} maritime anomal{'y' if len(df)==1 else 'ies'} — {date.today()}"
-msg["From"]    = sender
-msg["To"]      = recipient
-msg.attach(MIMEText(build_html(df), "html"))
+msg["Subject"] = (
+    f"[AIS Intel Brief] {len(df)} anomal{'y' if len(df)==1 else 'ies'} — {date.today()}"
+)
+msg["From"] = sender
+msg["To"]   = recipient
+msg.attach(MIMEText(brief_text, "plain"))
+msg.attach(MIMEText(build_html(brief_text), "html"))
 
 with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
     server.login(sender, password)
     server.sendmail(sender, recipient, msg.as_string())
 
-print(f"Alert sent to {recipient} — {len(df)} anomalies.")
+print(f"Intel brief sent to {recipient} — {len(df)} anomalies.")
