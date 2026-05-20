@@ -26,7 +26,7 @@ This project fills that gap.
 |---|---|---|
 | **Dark Gap** | Vessel disappears for N+ consecutive hours | Rule-based + statistical threshold |
 | **Impossible Speed** | Vessel reappears at a physically unreachable location | Distance / time vs. max vessel speed |
-| **AIS Spoofing** | Transmitted coordinates inconsistent with vessel kinematics | IMM Kalman Filter + ST-DBSCAN |
+| **AIS Spoofing** | Transmitted coordinates inconsistent with vessel kinematics | Rule-based consistency checks |
 
 ---
 
@@ -43,9 +43,8 @@ PROCESSING (dbt + Databricks)
   Gold:   anomaly scores + vessel risk profiles
 
 ML (MLflow on Databricks)
-  1. Rule-based        — dark gap > 6h + anomalous reappearance
-  2. Isolation Forest  — unsupervised baseline
-  3. IMM Kalman Filter + ST-DBSCAN — spoofing / jamming
+  1. Rule-based       — dark gap > 6h + anomalous reappearance
+  2. Isolation Forest — unsupervised outlier scoring
 
 DASHBOARD (Apache Superset)
   World map of anomalous vessels · Timeline of disappearances
