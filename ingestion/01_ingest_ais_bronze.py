@@ -1,58 +1,86 @@
 # Databricks notebook — run cell by cell
-# Reads NOAA AIS GeoParquet from public Azure Blob → Bronze Delta table
+# Downloads daily NOAA AIS Zstd-compressed CSV files → Bronze Delta table
 
 import os
+import zstandard
 import requests
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import current_timestamp, lit
+from pyspark.sql.types import (
+    StructType, StructField,
+    StringType, TimestampType, DoubleType, IntegerType,
+)
 
 spark = SparkSession.builder.getOrCreate()
 
 # ── Config ────────────────────────────────────────────────────────────────────
-BASE_URL = "https://coast.noaa.gov/htdata/CMSP/AISDataHandler/2024/"
+BASE_URL = "https://noaaocm.blob.core.windows.net/ais/csv2/csv2024/"
 TMP_DIR  = "/tmp/ais_staging"
 TARGET   = "bronze.ais_raw"
 
-# Adjust: which months to ingest (start small — 1-2 months, ~5 GB zipped)
+# Adjust: which months to ingest (start small — 1-2 months, ~8 GB compressed)
 MONTHS   = ["01", "02"]
 DAYS     = range(1, 32)
+
+# Explicit schema — avoids the double-scan of inferSchema and ensures MMSI is
+# a string so it joins correctly against bronze.sanctions.mmsi (also string).
+AIS_SCHEMA = StructType([
+    StructField("mmsi",          StringType(),    True),
+    StructField("base_date_time",TimestampType(), True),
+    StructField("longitude",     DoubleType(),    True),
+    StructField("latitude",      DoubleType(),    True),
+    StructField("sog",           DoubleType(),    True),
+    StructField("cog",           DoubleType(),    True),
+    StructField("heading",       IntegerType(),   True),
+    StructField("vessel_name",   StringType(),    True),
+    StructField("imo",           StringType(),    True),  # "IMO" prefix in raw data
+    StructField("call_sign",     StringType(),    True),
+    StructField("vessel_type",   IntegerType(),   True),
+    StructField("status",        IntegerType(),   True),
+    StructField("length",        IntegerType(),   True),
+    StructField("width",         IntegerType(),   True),
+    StructField("draft",         DoubleType(),    True),
+    StructField("cargo",         IntegerType(),   True),
+    StructField("transceiver",   StringType(),    True),
+])
 
 os.makedirs(TMP_DIR, exist_ok=True)
 spark.sql("CREATE DATABASE IF NOT EXISTS bronze")
 
 # ── Ingestion loop ─────────────────────────────────────────────────────────────
-import zipfile
-
 for month in MONTHS:
     for day in DAYS:
-        stem     = f"AIS_2024_{month}_{day:02d}"
-        filename = stem + ".zip"
-        url      = BASE_URL + filename
-        dst_zip  = f"{TMP_DIR}/{filename}"
-        dst_csv  = f"{TMP_DIR}/{stem}.csv"
+        filename  = f"ais-2024-{month}-{day:02d}.csv.zst"
+        url       = BASE_URL + filename
+        dst_zst   = f"{TMP_DIR}/{filename}"
+        dst_csv   = dst_zst[:-4]  # strip .zst
 
         r = requests.get(url, timeout=300)
         if r.status_code != 200:
             print(f"skip  {filename} — {r.status_code}")
             continue
 
-        with open(dst_zip, "wb") as f:
+        with open(dst_zst, "wb") as f:
             f.write(r.content)
 
-        with zipfile.ZipFile(dst_zip, "r") as z:
-            csv_name = next(n for n in z.namelist() if n.endswith(".csv"))
-            z.extract(csv_name, TMP_DIR)
-            extracted = f"{TMP_DIR}/{csv_name}"
+        # Decompress .zst → .csv
+        dctx = zstandard.ZstdDecompressor()
+        with open(dst_zst, "rb") as src, open(dst_csv, "wb") as dst:
+            dctx.copy_stream(src, dst)
 
         df = (
-            spark.read.option("header", "true").option("inferSchema", "true").csv(extracted)
-            .withColumn("_ingestion_ts",  current_timestamp())
-            .withColumn("_source_file",   lit(filename))
+            spark.read
+            .option("header", "true")
+            .option("timestampFormat", "yyyy-MM-dd HH:mm:ss")
+            .schema(AIS_SCHEMA)
+            .csv(dst_csv)
+            .withColumn("_ingestion_ts", current_timestamp())
+            .withColumn("_source_file",  lit(filename))
         )
 
         df.write.format("delta").mode("append").saveAsTable(TARGET)
-        os.remove(dst_zip)
-        os.remove(extracted)
+        os.remove(dst_zst)
+        os.remove(dst_csv)
         print(f"ok    {filename} — {df.count():,} rows")
 
 print(f"\nDone. Total rows in {TARGET}: {spark.table(TARGET).count():,}")

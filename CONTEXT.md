@@ -154,5 +154,5 @@ Most published research operates in batch mode on historical AIS data. Operation
 | Agrebi — *Synthetic GPS Dataset for AI-Based Spoofing Detection on MASS* (IEEE DataPort) | Dataset | Oct 2025 |
 | NATO STO — *Real-Time AIS Data Analysis for Anomaly Detection* | NATO paper | 2024 |
 | Singh & Heymann (DLR) — *ML-Assisted Anomaly Detection Using AIS* (arxiv:2002.05013) | Academic paper | 2020 |
-| NOAA / US Coast Guard — MarineCadastre.gov AIS Dataset | Public dataset (CC0) | 2009–2024 |
+| NOAA / US Coast Guard — MarineCadastre.gov AIS Dataset (hub.marinecadastre.gov/pages/vesseltraffic) | Public dataset (CC0) · CSV Zstd daily files | 2009–2025 |
 | OpenSanctions | Public dataset | Continuously updated |

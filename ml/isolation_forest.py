@@ -31,7 +31,7 @@ df["is_outlier"]  = df["if_score"] == -1
 spark.sql("CREATE DATABASE IF NOT EXISTS gold")
 
 result = spark.createDataFrame(
-    df[["MMSI", "VesselName", "event_ts", "anomaly_type",
+    df[["mmsi", "vessel_name", "event_ts", "anomaly_type",
         "anomaly_score", "if_score", "is_outlier",
         "sanctions_match", "lat", "lon"]]
 ).withColumn("_scored_at", current_timestamp())

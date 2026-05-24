@@ -34,9 +34,9 @@ This project fills that gap.
 
 ```
 SOURCES
-  US Coast Guard AIS — public Azure Blob (GeoParquet) ─┐
-  OpenSanctions — REST API (free, non-commercial) ──────┼──▶ Bronze (Delta Lake)
-  IMO Ship Registry ───────────────────────────────────┘
+  US Coast Guard AIS — NOAA blob, CSV Zstd daily files ──┐
+  OpenSanctions — bulk JSON download (free) ─────────────┼──▶ Bronze (Delta Lake)
+  IMO Ship Registry ────────────────────────────────────┘
 
 PROCESSING (dbt + Databricks)
   Silver: cleaned trajectories + artifact removal (MMSI duplicates, retransmissions)
@@ -72,7 +72,7 @@ DASHBOARD (Apache Superset)
 
 | Source | License | Coverage |
 |---|---|---|
-| [NOAA MarineCadastre AIS](https://ocmgeodatastor1.blob.core.windows.net/marinecadastre/ais2024/) | CC0 — public domain | US coastal waters, 2009–2025 |
+| [NOAA MarineCadastre AIS](https://hub.marinecadastre.gov/pages/vesseltraffic) | CC0 — public domain | US coastal waters, 2009–2025 · CSV Zstd daily files |
 | [OpenSanctions](https://opensanctions.org) | CC BY 4.0 | Continuously updated |
 | [IMO Ship Registry](https://gisis.imo.org) | Public (registration required) | Global |
 

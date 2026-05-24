@@ -2,7 +2,7 @@
 
 with dark_gaps as (
     select
-        MMSI, VesselName,
+        mmsi, vessel_name,
         gap_start        as event_ts,
         last_known_lat   as lat,
         last_known_lon   as lon,
@@ -13,7 +13,7 @@ with dark_gaps as (
 
 impossible_speeds as (
     select
-        MMSI, VesselName,
+        mmsi, vessel_name,
         event_start      as event_ts,
         from_lat         as lat,
         from_lon         as lon,

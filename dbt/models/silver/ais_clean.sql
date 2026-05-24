@@ -4,12 +4,12 @@ with source as (
     select * from {{ source('bronze', 'ais_raw') }}
 ),
 
--- 1. Remove exact duplicates (same MMSI + same timestamp)
+-- 1. Remove exact duplicates (same mmsi + same timestamp)
 deduplicated as (
     select *
     from source
     qualify row_number() over (
-        partition by MMSI, BaseDateTime
+        partition by mmsi, base_date_time
         order by _ingestion_ts desc
     ) = 1
 ),
@@ -19,8 +19,8 @@ no_retransmissions as (
     select *
     from deduplicated
     qualify row_number() over (
-        partition by MMSI, LAT, LON, SOG, COG
-        order by BaseDateTime
+        partition by mmsi, latitude, longitude, sog, cog
+        order by base_date_time
     ) = 1
 ),
 
@@ -28,9 +28,9 @@ no_retransmissions as (
 validated as (
     select *,
         case
-            when LAT  < -90   or LAT  > 90    then 'invalid_lat'
-            when LON  < -180  or LON  > 180   then 'invalid_lon'
-            when SOG  < 0     or SOG  > 102.2 then 'invalid_sog'
+            when latitude  < -90   or latitude  > 90    then 'invalid_lat'
+            when longitude < -180  or longitude > 180   then 'invalid_lon'
+            when sog       < 0     or sog       > 102.2 then 'invalid_sog'
             else null
         end as quality_flag
     from no_retransmissions

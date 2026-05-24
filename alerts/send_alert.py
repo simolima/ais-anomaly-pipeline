@@ -34,7 +34,7 @@ if df.empty:
 def anomaly_context_line(row) -> str:
     sanctions = f"SANCTIONS MATCH: {row['sanctions_match']}" if row.get("sanctions_match") else "no sanctions match"
     return (
-        f"- Vessel: {row['VesselName']} (MMSI {row['MMSI']}) | "
+        f"- Vessel: {row['vessel_name']} (MMSI {row['mmsi']}) | "
         f"Type: {row['anomaly_type'].replace('_', ' ').upper()} | "
         f"Score: {row['anomaly_score']:.2f} | "
         f"Position: {row['lat']:.4f}°N {row['lon']:.4f}°E | "
