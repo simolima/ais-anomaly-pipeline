@@ -9,11 +9,11 @@ from pyspark.sql.functions import current_timestamp, lit
 spark = SparkSession.builder.getOrCreate()
 
 # ── Config ────────────────────────────────────────────────────────────────────
-BASE_URL = "https://ocmgeodatastor1.blob.core.windows.net/marinecadastre/ais2024/"
+BASE_URL = "https://coast.noaa.gov/htdata/CMSP/AISDataHandler/2024/"
 TMP_DIR  = "/tmp/ais_staging"
 TARGET   = "bronze.ais_raw"
 
-# Adjust: which months to ingest (start small — 1-2 months, ~2 GB)
+# Adjust: which months to ingest (start small — 1-2 months, ~5 GB zipped)
 MONTHS   = ["01", "02"]
 DAYS     = range(1, 32)
 
@@ -21,28 +21,38 @@ os.makedirs(TMP_DIR, exist_ok=True)
 spark.sql("CREATE DATABASE IF NOT EXISTS bronze")
 
 # ── Ingestion loop ─────────────────────────────────────────────────────────────
+import zipfile
+
 for month in MONTHS:
     for day in DAYS:
-        filename = f"AIS_2024_{month}_{day:02d}.parquet"
+        stem     = f"AIS_2024_{month}_{day:02d}"
+        filename = stem + ".zip"
         url      = BASE_URL + filename
-        dst      = f"{TMP_DIR}/{filename}"
+        dst_zip  = f"{TMP_DIR}/{filename}"
+        dst_csv  = f"{TMP_DIR}/{stem}.csv"
 
-        r = requests.get(url, timeout=120)
+        r = requests.get(url, timeout=300)
         if r.status_code != 200:
             print(f"skip  {filename} — {r.status_code}")
             continue
 
-        with open(dst, "wb") as f:
+        with open(dst_zip, "wb") as f:
             f.write(r.content)
 
+        with zipfile.ZipFile(dst_zip, "r") as z:
+            csv_name = next(n for n in z.namelist() if n.endswith(".csv"))
+            z.extract(csv_name, TMP_DIR)
+            extracted = f"{TMP_DIR}/{csv_name}"
+
         df = (
-            spark.read.parquet(dst)
+            spark.read.option("header", "true").option("inferSchema", "true").csv(extracted)
             .withColumn("_ingestion_ts",  current_timestamp())
             .withColumn("_source_file",   lit(filename))
         )
 
         df.write.format("delta").mode("append").saveAsTable(TARGET)
-        os.remove(dst)
+        os.remove(dst_zip)
+        os.remove(extracted)
         print(f"ok    {filename} — {df.count():,} rows")
 
 print(f"\nDone. Total rows in {TARGET}: {spark.table(TARGET).count():,}")
