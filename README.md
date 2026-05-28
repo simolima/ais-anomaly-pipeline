@@ -2,6 +2,8 @@
 
 **Open-source pipeline for maritime AIS anomaly detection and sanctions evasion intelligence.**
 
+> **Status:** active development — pipeline architecture and ML models are implemented; Databricks deployment in progress.
+
 ---
 
 ## What this is

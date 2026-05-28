@@ -128,7 +128,6 @@ Most published research operates in batch mode on historical AIS data. Operation
 - Artifact removal that addresses MMSI collision, retransmission, and coordinate errors (following Park et al. 2026)
 - Rule-based dark gap and impossible speed detection with explainable thresholds
 - Unsupervised ML baseline (Isolation Forest) for anomaly scoring
-- IMM Kalman Filter + ST-DBSCAN for spoofing/jamming pattern detection
 - Join with OpenSanctions for risk profile enrichment
 - A dashboard that makes findings interpretable, not just numeric scores
 
