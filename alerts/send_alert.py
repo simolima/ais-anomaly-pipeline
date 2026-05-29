@@ -1,133 +1,144 @@
-# Databricks notebook — schedule daily via Databricks Workflows
-# Reads high-confidence anomalies from gold.vessel_risk_scores,
-# generates an AI narrative brief via Claude, then sends it by email.
-
 import os
+import math
 import smtplib
 from datetime import date
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
-import anthropic
 from pyspark.sql import SparkSession
 
 spark = SparkSession.builder.getOrCreate()
 
-SCORE_THRESHOLD = 0.7   # only alert on high-confidence anomalies
+SCORE_THRESHOLD = 0.7
+RECIPIENT = "simone.lima97@gmail.com"
 
-# ── Load today's high-score anomalies ──────────────────────────────────────────
-df = spark.sql(f"""
-    select *
+
+def haversine_nm(lat1, lon1, lat2, lon2):
+    R = 3440.065  # nautical miles
+    dlat = math.radians(lat2 - lat1)
+    dlon = math.radians(lon2 - lon1)
+    a = (math.sin(dlat / 2) ** 2
+         + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon / 2) ** 2)
+    return R * 2 * math.asin(math.sqrt(a))
+
+
+outliers = spark.sql(f"""
+    select mmsi, vessel_name, event_ts, anomaly_type, anomaly_score, sanctions_match, lat, lon
     from gold.vessel_risk_scores
     where is_outlier = true
       and anomaly_score >= {SCORE_THRESHOLD}
-      and date(event_ts) = current_date() - interval 1 day
     order by anomaly_score desc
-    limit 20
+    limit 50
 """).toPandas()
 
-if df.empty:
-    print("No high-confidence anomalies today — no alert sent.")
+if outliers.empty:
+    print("No outliers above threshold — no alert sent.")
     raise SystemExit(0)
 
-# ── Build per-row context for Claude ──────────────────────────────────────────
-def anomaly_context_line(row) -> str:
-    sanctions = f"SANCTIONS MATCH: {row['sanctions_match']}" if row.get("sanctions_match") else "no sanctions match"
-    return (
-        f"- Vessel: {row['vessel_name']} (MMSI {row['mmsi']}) | "
-        f"Type: {row['anomaly_type'].replace('_', ' ').upper()} | "
-        f"Score: {row['anomaly_score']:.2f} | "
-        f"Position: {row['lat']:.4f}°N {row['lon']:.4f}°E | "
-        f"{sanctions}"
-    )
+dark_gaps = spark.sql("""
+    select mmsi, gap_start, gap_end, gap_hours,
+           last_known_lat, last_known_lon,
+           reappearance_lat, reappearance_lon
+    from gold.ais_dark_gaps
+""").toPandas()
 
-anomaly_lines = "\n".join(anomaly_context_line(r) for _, r in df.iterrows())
-
-user_prompt = f"""Date: {date.today()}
-Anomalies detected in the last 24 hours ({len(df)} total):
-
-{anomaly_lines}
-
-Write the intelligence brief now."""
-
-# ── Call Claude with a cached system prompt ────────────────────────────────────
-SYSTEM_PROMPT = """You are a senior maritime intelligence analyst producing daily operational briefs for a NATO maritime situational awareness cell.
-
-Your briefs are read by flag officers and policy staff. Write with precision and economy — no filler, no hedging. Every sentence must earn its place.
-
-For each anomaly batch you receive, produce a structured brief with these sections:
-
-EXECUTIVE SUMMARY
-One or two sentences: how many vessels flagged, the dominant threat pattern, and whether any sanctions-listed entities are implicated.
-
-VESSEL-BY-VESSEL ASSESSMENT
-For each vessel: state the anomaly type, what it physically implies (e.g., transponder shutdown in a congested lane suggests deliberate concealment), and one recommended action. Flag vessels with sanctions matches with ⚠ PRIORITY.
-
-Recommended actions should be specific and operational:
-- Sanctions match → "Flag for OFAC/EU reporting and request port-state inspection at next declared call"
-- Impossible speed → "Cross-reference with satellite SAR imagery for the implied transit corridor; request LRIT data from flag state"
-- Dark gap → "Alert port authority at next declared port of call; cross-check with alternative tracking sources (satellite AIS, LRIT)"
-- Multiple anomaly types on one MMSI → escalate: "Refer to national maritime intelligence agency for full OSINT package"
-
-THREAT LEVEL ASSESSMENT
-Rate the overall batch: ROUTINE / ELEVATED / HIGH. Justify in one sentence.
-
-Write in plain English. No markdown headers with hashes — use CAPS for section titles. No bullet points in the executive summary."""
-
-client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
-
-response = client.messages.create(
-    model="claude-sonnet-4-6",
-    max_tokens=1500,
-    system=[
-        {
-            "type": "text",
-            "text": SYSTEM_PROMPT,
-            "cache_control": {"type": "ephemeral"},  # cache the stable system prompt
-        }
-    ],
-    messages=[{"role": "user", "content": user_prompt}],
+df = outliers.merge(
+    dark_gaps,
+    left_on=["mmsi", "event_ts"],
+    right_on=["mmsi", "gap_start"],
+    how="left",
 )
 
-brief_text = response.content[0].text
 
-cache_hits = getattr(response.usage, "cache_read_input_tokens", 0)
-print(f"Claude brief generated — cache_read_input_tokens: {cache_hits}")
+def _f(v):
+    try:
+        return f"{float(v):.4f}" if v is not None and not math.isnan(float(v)) else "—"
+    except (TypeError, ValueError):
+        return "—"
 
-# ── Build plain-text + HTML email ─────────────────────────────────────────────
-def build_html(brief: str) -> str:
-    escaped = brief.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-    paragraphs = "".join(
-        f"<p>{line}</p>" if line.strip() else "<br>"
-        for line in escaped.splitlines()
+
+def _v(v):
+    return str(v) if v else "—"
+
+
+def calc_distance(row):
+    if row["anomaly_type"] == "dark_gap":
+        try:
+            return round(haversine_nm(
+                float(row["last_known_lat"]), float(row["last_known_lon"]),
+                float(row["reappearance_lat"]), float(row["reappearance_lon"]),
+            ), 1)
+        except (TypeError, ValueError):
+            pass
+    return None
+
+
+df["distance_nm"] = df.apply(calc_distance, axis=1)
+
+rows_html = ""
+for _, r in df.iterrows():
+    sanctions = (
+        f'<td style="color:#b30000;font-weight:bold">{r["sanctions_match"]}</td>'
+        if r.get("sanctions_match")
+        else "<td>—</td>"
     )
-    return f"""
-    <html><body style="font-family:sans-serif;max-width:720px;margin:auto">
-      <h2 style="color:#b30000">Maritime Intelligence Brief — {date.today()}</h2>
-      <p style="color:#666;font-size:13px">
-        {len(df)} anomal{'y' if len(df)==1 else 'ies'} above threshold {SCORE_THRESHOLD} · Generated by Claude AI
-      </p>
-      <hr>
-      <div style="font-size:15px;line-height:1.7;white-space:pre-wrap">{paragraphs}</div>
-    </body></html>
-    """
+    if r["anomaly_type"] == "dark_gap":
+        disappeared = f"{_f(r.get('last_known_lat'))}°N  {_f(r.get('last_known_lon'))}°E"
+        reappeared  = f"{_f(r.get('reappearance_lat'))}°N  {_f(r.get('reappearance_lon'))}°E"
+        movement    = f"{_v(r.get('gap_hours'))} h gap · {_v(r.get('distance_nm'))} nm"
+    else:
+        disappeared = f"{_f(r.get('lat'))}°N  {_f(r.get('lon'))}°E"
+        reappeared  = "—"
+        movement    = "impossible speed"
 
-# ── Send via Gmail SMTP ────────────────────────────────────────────────────────
-sender    = os.environ["ALERT_EMAIL_FROM"]
-password  = os.environ["ALERT_EMAIL_PASSWORD"]
-recipient = os.environ["ALERT_EMAIL_TO"]
+    rows_html += f"""
+    <tr>
+      <td>{_v(r['vessel_name'])}</td>
+      <td>{r['mmsi']}</td>
+      <td>{r['anomaly_type'].replace('_', ' ')}</td>
+      <td>{disappeared}</td>
+      <td>{reappeared}</td>
+      <td>{movement}</td>
+      <td>{r['anomaly_score']:.2f}</td>
+      {sanctions}
+    </tr>"""
+
+html = f"""<html><body style="font-family:sans-serif;max-width:960px;margin:auto">
+  <h2 style="color:#1a1a2e">AIS Anomaly Report — {date.today()}</h2>
+  <p style="color:#555">{len(df)} vessel{'s' if len(df) != 1 else ''} flagged &middot; score &ge; {SCORE_THRESHOLD}</p>
+  <table border="1" cellpadding="6" cellspacing="0"
+         style="border-collapse:collapse;width:100%;font-size:13px">
+    <thead style="background:#1a1a2e;color:white">
+      <tr>
+        <th>Vessel</th><th>MMSI</th><th>Anomaly</th>
+        <th>Disappeared at</th><th>Reappeared at</th>
+        <th>Movement</th><th>Score</th><th>Sanctions</th>
+      </tr>
+    </thead>
+    <tbody>{rows_html}</tbody>
+  </table>
+  <p style="color:#aaa;font-size:11px;margin-top:20px">
+    AIS Anomaly Pipeline &middot; {date.today()}
+  </p>
+</body></html>"""
+
+plain = "\n".join(
+    f"{r['vessel_name']} | {r['mmsi']} | {r['anomaly_type']} | score {r['anomaly_score']:.2f}"
+    for _, r in df.iterrows()
+)
+
+sender   = os.environ["ALERT_EMAIL_FROM"]
+password = os.environ["ALERT_EMAIL_PASSWORD"]
 
 msg = MIMEMultipart("alternative")
-msg["Subject"] = (
-    f"[AIS Intel Brief] {len(df)} anomal{'y' if len(df)==1 else 'ies'} — {date.today()}"
-)
-msg["From"] = sender
-msg["To"]   = recipient
-msg.attach(MIMEText(brief_text, "plain"))
-msg.attach(MIMEText(build_html(brief_text), "html"))
+msg["Subject"] = f"[AIS Alert] {len(df)} anomal{'y' if len(df) == 1 else 'ies'} — {date.today()}"
+msg["From"]    = sender
+msg["To"]      = RECIPIENT
+msg.attach(MIMEText(plain, "plain"))
+msg.attach(MIMEText(html, "html"))
 
 with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
     server.login(sender, password)
-    server.sendmail(sender, recipient, msg.as_string())
+    server.sendmail(sender, RECIPIENT, msg.as_string())
 
-print(f"Intel brief sent to {recipient} — {len(df)} anomalies.")
+print(f"Alert sent to {RECIPIENT} — {len(df)} anomalies.")

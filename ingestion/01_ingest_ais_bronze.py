@@ -19,7 +19,7 @@ TMP_DIR  = "/tmp/ais_staging"
 TARGET   = "bronze.ais_raw"
 
 # Adjust: which months to ingest (start small — 1-2 months, ~8 GB compressed)
-MONTHS   = ["01", "02"]
+MONTHS   = ["01"]
 DAYS     = range(1, 32)
 
 # Explicit schema — avoids the double-scan of inferSchema and ensures MMSI is

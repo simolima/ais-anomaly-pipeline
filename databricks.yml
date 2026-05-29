@@ -66,6 +66,5 @@ resources:
             dependencies:
               - zstandard
               - requests
-              - anthropic
               - scikit-learn
               - pandas
