@@ -6,8 +6,10 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
 from pyspark.sql import SparkSession
+from pyspark.dbutils import DBUtils
 
 spark = SparkSession.builder.getOrCreate()
+dbutils = DBUtils(spark)
 
 SCORE_THRESHOLD = 0.7
 
@@ -126,9 +128,12 @@ plain = "\n".join(
     for _, r in df.iterrows()
 )
 
-sender     = os.environ["ALERT_EMAIL_FROM"]
-password   = os.environ["ALERT_EMAIL_PASSWORD"]
-recipients = [r.strip() for r in os.environ["ALERT_EMAIL_TO"].split(",") if r.strip()]
+sender     = dbutils.secrets.get("ais_secrets", "ALERT_EMAIL_FROM")
+password   = dbutils.secrets.get("ais_secrets", "ALERT_EMAIL_PASSWORD")
+
+_config_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../config/alert_recipients.csv")
+with open(_config_file) as f:
+    recipients = [line.strip() for line in f if line.strip() and line.strip() != "email"]
 
 msg = MIMEMultipart("alternative")
 msg["Subject"] = f"[AIS Alert] {len(df)} anomal{'y' if len(df) == 1 else 'ies'} — {date.today()}"
