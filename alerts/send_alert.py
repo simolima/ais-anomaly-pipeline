@@ -10,7 +10,6 @@ from pyspark.sql import SparkSession
 spark = SparkSession.builder.getOrCreate()
 
 SCORE_THRESHOLD = 0.7
-RECIPIENT = "simone.lima97@gmail.com"
 
 
 def haversine_nm(lat1, lon1, lat2, lon2):
@@ -127,18 +126,19 @@ plain = "\n".join(
     for _, r in df.iterrows()
 )
 
-sender   = os.environ["ALERT_EMAIL_FROM"]
-password = os.environ["ALERT_EMAIL_PASSWORD"]
+sender     = os.environ["ALERT_EMAIL_FROM"]
+password   = os.environ["ALERT_EMAIL_PASSWORD"]
+recipients = [r.strip() for r in os.environ["ALERT_EMAIL_TO"].split(",") if r.strip()]
 
 msg = MIMEMultipart("alternative")
 msg["Subject"] = f"[AIS Alert] {len(df)} anomal{'y' if len(df) == 1 else 'ies'} — {date.today()}"
 msg["From"]    = sender
-msg["To"]      = RECIPIENT
+msg["To"]      = ", ".join(recipients)
 msg.attach(MIMEText(plain, "plain"))
 msg.attach(MIMEText(html, "html"))
 
 with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
     server.login(sender, password)
-    server.sendmail(sender, RECIPIENT, msg.as_string())
+    server.sendmail(sender, recipients, msg.as_string())
 
-print(f"Alert sent to {RECIPIENT} — {len(df)} anomalies.")
+print(f"Alert sent to {recipients} — {len(df)} anomalies.")
