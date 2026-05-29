@@ -1,0 +1,69 @@
+bundle:
+  name: ais-anomaly-pipeline
+
+targets:
+  dev:
+    default: true
+    workspace:
+      host: https://dbc-f2967afc-a9f1.cloud.databricks.com
+  prod:
+    mode: production
+    workspace:
+      host: https://dbc-f2967afc-a9f1.cloud.databricks.com
+
+variables:
+  warehouse_id:
+    # Find it: Databricks → SQL Warehouses → your warehouse → Connection details → HTTP path → last segment (e.g. /sql/1.0/warehouses/abc123 → use "abc123")
+    description: "SQL Warehouse ID for dbt tasks"
+    default: "dfaee2d99ca6e1e1"
+
+resources:
+  jobs:
+    ais_pipeline:
+      name: "AIS Anomaly Pipeline"
+
+      tasks:
+        - task_key: ingest_ais
+          spark_python_task:
+            python_file: ${workspace.file_path}/ingestion/01_ingest_ais_bronze.py
+          environment_key: default
+
+        - task_key: ingest_sanctions
+          spark_python_task:
+            python_file: ${workspace.file_path}/ingestion/02_ingest_sanctions_bronze.py
+          environment_key: default
+
+        - task_key: dbt_transform
+          depends_on:
+            - task_key: ingest_ais
+            - task_key: ingest_sanctions
+          dbt_task:
+            project_directory: ${workspace.file_path}/dbt
+            commands:
+              - dbt run
+            warehouse_id: ${var.warehouse_id}
+
+        - task_key: ml_scoring
+          depends_on:
+            - task_key: dbt_transform
+          spark_python_task:
+            python_file: ${workspace.file_path}/ml/isolation_forest.py
+          environment_key: default
+
+        - task_key: send_alert
+          depends_on:
+            - task_key: ml_scoring
+          spark_python_task:
+            python_file: ${workspace.file_path}/alerts/send_alert.py
+          environment_key: default
+
+      environments:
+        - environment_key: default
+          spec:
+            client: "1"
+            dependencies:
+              - zstandard
+              - requests
+              - anthropic
+              - scikit-learn
+              - pandas
