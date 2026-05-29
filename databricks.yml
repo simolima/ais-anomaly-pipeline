@@ -43,6 +43,7 @@ resources:
             commands:
               - dbt run
             warehouse_id: ${var.warehouse_id}
+          environment_key: default
 
         - task_key: ml_scoring
           depends_on:
