@@ -38,19 +38,9 @@ AIS_SCHEMA = StructType([
     StructField("transceiver",   StringType(),    True),
 ])
 
-RENAME = {
-    "MMSI": "mmsi", "BaseDateTime": "base_date_time",
-    "LAT": "longitude", "LON": "latitude",
-    "SOG": "sog", "COG": "cog", "Heading": "heading",
-    "VesselName": "vessel_name", "IMO": "imo", "CallSign": "call_sign",
-    "VesselType": "vessel_type", "Status": "status",
-    "Length": "length", "Width": "width", "Draft": "draft",
-    "Cargo": "cargo", "TransceiverClass": "transceiver",
-}
-
 DTYPES = {
-    "MMSI": str, "VesselName": str, "IMO": str,
-    "CallSign": str, "TransceiverClass": str,
+    "mmsi": str, "vessel_name": str, "imo": str,
+    "call_sign": str, "transceiver": str,
 }
 
 spark.sql("CREATE DATABASE IF NOT EXISTS bronze")
@@ -75,10 +65,9 @@ for month in MONTHS:
                 chunksize=CHUNK,
                 dtype=DTYPES,
             ):
-                chunk["BaseDateTime"] = pd.to_datetime(
-                    chunk["BaseDateTime"], format="%Y-%m-%d %H:%M:%S", errors="coerce"
+                chunk["base_date_time"] = pd.to_datetime(
+                    chunk["base_date_time"], format="%Y-%m-%d %H:%M:%S", errors="coerce"
                 )
-                chunk = chunk.rename(columns=RENAME)
                 df = (
                     spark.createDataFrame(chunk, schema=AIS_SCHEMA)
                     .withColumn("_ingestion_ts", current_timestamp())
