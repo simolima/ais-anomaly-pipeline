@@ -1,7 +1,9 @@
 import io
+import os
 import sys
 from datetime import date, timedelta
 
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from ingestion.utils import compute_window
 
 import pandas as pd
