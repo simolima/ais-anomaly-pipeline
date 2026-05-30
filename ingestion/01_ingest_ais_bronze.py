@@ -3,6 +3,16 @@ import sys
 from datetime import date, timedelta
 from typing import Optional
 
+import pandas as pd
+import requests
+import zstandard
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import current_timestamp, lit
+from pyspark.sql.types import (
+    StructType, StructField,
+    StringType, TimestampType, DoubleType, IntegerType,
+)
+
 
 def _parse_date(filename: str) -> Optional[date]:
     try:
@@ -23,15 +33,17 @@ def _compute_window(
         return None
     return start, min(start + timedelta(days=window_days - 1), end_date)
 
-import pandas as pd
-import requests
-import zstandard
-from pyspark.sql import SparkSession
-from pyspark.sql.functions import current_timestamp, lit
-from pyspark.sql.types import (
-    StructType, StructField,
-    StringType, TimestampType, DoubleType, IntegerType,
-)
+
+def _flush(spark, buf, filename, schema, target):
+    pdf = pd.concat(buf, ignore_index=True)
+    (
+        spark.createDataFrame(pdf, schema=schema)
+        .withColumn("_ingestion_ts", current_timestamp())
+        .withColumn("_source_file",  lit(filename))
+        .write.format("delta").mode("append").saveAsTable(target)
+    )
+    return len(pdf)
+
 
 spark = SparkSession.builder.getOrCreate()
 
@@ -74,7 +86,8 @@ try:
         row._source_file
         for row in spark.table(TARGET).select("_source_file").distinct().collect()
     }
-except Exception:
+except Exception as e:
+    print(f"Could not read ingested files (table may not exist yet): {e}")
     ingested_files = set()
 
 window = _compute_window(ingested_files, WINDOW_DAYS, END_DATE)
@@ -93,44 +106,33 @@ while current <= end_date:
     if filename in ingested_files:
         spark.sql(f"DELETE FROM {TARGET} WHERE _source_file = '{filename}'")
 
-    url = BASE_URL + filename
-    r   = requests.get(url, timeout=300, stream=True)
-    if r.status_code != 200:
-        print(f"skip  {filename} — HTTP {r.status_code}")
-        current += timedelta(days=1)
-        continue
-
-    dctx       = zstandard.ZstdDecompressor()
     buffer     = []
     total_rows = 0
 
-    def flush(buf):
-        pdf = pd.concat(buf, ignore_index=True)
-        (
-            spark.createDataFrame(pdf, schema=AIS_SCHEMA)
-            .withColumn("_ingestion_ts", current_timestamp())
-            .withColumn("_source_file",  lit(filename))
-            .write.format("delta").mode("append").saveAsTable(TARGET)
-        )
-        return len(pdf)
+    with requests.get(BASE_URL + filename, timeout=300, stream=True) as r:
+        if r.status_code != 200:
+            print(f"skip  {filename} — HTTP {r.status_code}")
+            current += timedelta(days=1)
+            continue
 
-    with dctx.stream_reader(r.raw) as zst_stream:
-        text_stream = io.TextIOWrapper(zst_stream, encoding="utf-8")
-        for i, chunk in enumerate(pd.read_csv(
-            text_stream,
-            chunksize=CHUNK,
-            dtype=DTYPES,
-        ), start=1):
-            chunk["base_date_time"] = pd.to_datetime(
-                chunk["base_date_time"], format="%Y-%m-%d %H:%M:%S", errors="coerce"
-            )
-            buffer.append(chunk)
-            if i % WRITE_EVERY == 0:
-                total_rows += flush(buffer)
-                buffer = []
+        dctx = zstandard.ZstdDecompressor()
+        with dctx.stream_reader(r.raw) as zst_stream:
+            text_stream = io.TextIOWrapper(zst_stream, encoding="utf-8")
+            for i, chunk in enumerate(pd.read_csv(
+                text_stream,
+                chunksize=CHUNK,
+                dtype=DTYPES,
+            ), start=1):
+                chunk["base_date_time"] = pd.to_datetime(
+                    chunk["base_date_time"], format="%Y-%m-%d %H:%M:%S", errors="coerce"
+                )
+                buffer.append(chunk)
+                if i % WRITE_EVERY == 0:
+                    total_rows += _flush(spark, buffer, filename, AIS_SCHEMA, TARGET)
+                    buffer = []
 
     if buffer:
-        total_rows += flush(buffer)
+        total_rows += _flush(spark, buffer, filename, AIS_SCHEMA, TARGET)
 
     print(f"ok    {filename} — {total_rows:,} rows")
     current += timedelta(days=1)
