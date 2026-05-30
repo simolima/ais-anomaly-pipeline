@@ -19,18 +19,33 @@ variables:
 
 resources:
   jobs:
-    ais_pipeline:
-      name: "AIS Anomaly Pipeline"
+
+    # Runs hourly until all 2024 data is loaded (script exits cleanly when done)
+    ais_ingest:
+      name: "AIS Ingest Bronze"
       schedule:
         quartz_cron_expression: "0 0 * ? * *"
         timezone_id: "UTC"
         pause_status: UNPAUSED
+      max_concurrent_runs: 1
       tasks:
         - task_key: ingest_ais
           spark_python_task:
             python_file: ${workspace.file_path}/ingestion/01_ingest_ais_bronze.py
           environment_key: default
+      environments:
+        - environment_key: default
+          spec:
+            environment_version: "2"
+            dependencies:
+              - zstandard
+              - requests
+              - pandas
 
+    # Run manually once bronze.ais_raw is fully loaded
+    ais_pipeline:
+      name: "AIS Anomaly Pipeline"
+      tasks:
         - task_key: ingest_sanctions
           spark_python_task:
             python_file: ${workspace.file_path}/ingestion/02_ingest_sanctions_bronze.py
@@ -38,7 +53,6 @@ resources:
 
         - task_key: dbt_transform
           depends_on:
-            - task_key: ingest_ais
             - task_key: ingest_sanctions
           dbt_task:
             project_directory: ${workspace.file_path}/dbt
@@ -66,8 +80,6 @@ resources:
           spec:
             environment_version: "2"
             dependencies:
-              - zstandard
-              - requests
               - scikit-learn
               - pandas
               - dbt-databricks
