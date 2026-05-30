@@ -21,7 +21,7 @@ TARGET      = "bronze.ais_raw"
 END_DATE    = date(2024, 12, 31)
 WINDOW_DAYS = 7
 CHUNK       = 50_000
-WRITE_EVERY = 10   # flush every 500k rows
+WRITE_EVERY = 50   # flush every 2.5M rows (~20 Delta commits per 7-day run)
 
 AIS_SCHEMA = StructType([
     StructField("mmsi",          StringType(),    True),
@@ -70,10 +70,9 @@ current = start_date
 while current <= end_date:
     filename = f"ais-2024-{current.month:02d}-{current.day:02d}.csv.zst"
 
+    # Delete any partial data for this file before writing (makes each file idempotent)
     if filename in ingested_files:
-        print(f"skip  {filename} — already ingested")
-        current += timedelta(days=1)
-        continue
+        spark.sql(f"DELETE FROM {TARGET} WHERE _source_file = '{filename}'")
 
     url = BASE_URL + filename
     r   = requests.get(url, timeout=300, stream=True)
