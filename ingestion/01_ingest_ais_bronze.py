@@ -15,7 +15,7 @@ spark = SparkSession.builder.getOrCreate()
 BASE_URL = "https://noaaocm.blob.core.windows.net/ais/csv2/csv2024/"
 TARGET   = "bronze.ais_raw"
 MONTHS   = ["01"]
-DAYS     = range(1, 32)
+DAYS     = range(1, 8)
 CHUNK        = 50_000
 WRITE_EVERY  = 10        # scrivi su Delta ogni 10 chunk (= 500k righe)
 
