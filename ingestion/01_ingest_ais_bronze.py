@@ -64,7 +64,7 @@ for month in MONTHS:
             .option("header", "true")
             .option("timestampFormat", "yyyy-MM-dd HH:mm:ss")
             .schema(AIS_SCHEMA)
-            .csv(dst_csv)
+            .csv(f"file://{dst_csv}")
             .withColumn("_ingestion_ts", current_timestamp())
             .withColumn("_source_file",  lit(filename))
         )
