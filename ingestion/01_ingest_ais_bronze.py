@@ -77,6 +77,8 @@ AIS_SCHEMA = StructType([
 DTYPES = {
     "mmsi": str, "vessel_name": str, "imo": str,
     "call_sign": str, "transceiver": str,
+    "heading": "Int32", "vessel_type": "Int32", "status": "Int32",
+    "length": "Int32", "width": "Int32", "cargo": "Int32",
 }
 
 spark.sql("CREATE DATABASE IF NOT EXISTS bronze")
@@ -102,10 +104,6 @@ current = start_date
 while current <= end_date:
     filename = f"ais-2024-{current.month:02d}-{current.day:02d}.csv.zst"
 
-    # Delete any partial data for this file before writing (makes each file idempotent)
-    if filename in ingested_files:
-        spark.sql(f"DELETE FROM {TARGET} WHERE _source_file = '{filename}'")
-
     buffer     = []
     total_rows = 0
 
@@ -114,6 +112,10 @@ while current <= end_date:
             print(f"skip  {filename} — HTTP {r.status_code}")
             current += timedelta(days=1)
             continue
+
+        # Delete only after confirming the source file is available
+        if filename in ingested_files:
+            spark.sql(f"DELETE FROM {TARGET} WHERE _source_file = '{filename}'")
 
         dctx = zstandard.ZstdDecompressor()
         with dctx.stream_reader(r.raw) as zst_stream:
