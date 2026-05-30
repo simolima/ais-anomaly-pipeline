@@ -14,7 +14,6 @@ targets:
 
 variables:
   warehouse_id:
-    # Find it: Databricks → SQL Warehouses → your warehouse → Connection details → HTTP path → last segment (e.g. /sql/1.0/warehouses/abc123 → use "abc123")
     description: "SQL Warehouse ID for dbt tasks"
     default: "dfaee2d99ca6e1e1"
 
@@ -22,7 +21,6 @@ resources:
   jobs:
     ais_pipeline:
       name: "AIS Anomaly Pipeline"
-
       tasks:
         - task_key: ingest_ais
           spark_python_task:
@@ -62,7 +60,7 @@ resources:
       environments:
         - environment_key: default
           spec:
-            client: "1"
+            environment_version: "2"
             dependencies:
               - zstandard
               - requests

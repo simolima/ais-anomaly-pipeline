@@ -1,6 +1,3 @@
-# Databricks notebook — run cell by cell
-# Downloads daily NOAA AIS Zstd-compressed CSV files → Bronze Delta table
-
 import os
 import zstandard
 import requests
@@ -13,17 +10,12 @@ from pyspark.sql.types import (
 
 spark = SparkSession.builder.getOrCreate()
 
-# ── Config ────────────────────────────────────────────────────────────────────
 BASE_URL = "https://noaaocm.blob.core.windows.net/ais/csv2/csv2024/"
 TMP_DIR  = "/tmp/ais_staging"
 TARGET   = "bronze.ais_raw"
-
-# Adjust: which months to ingest (start small — 1-2 months, ~8 GB compressed)
 MONTHS   = ["01"]
 DAYS     = range(1, 32)
 
-# Explicit schema — avoids the double-scan of inferSchema and ensures MMSI is
-# a string so it joins correctly against bronze.sanctions.mmsi (also string).
 AIS_SCHEMA = StructType([
     StructField("mmsi",          StringType(),    True),
     StructField("base_date_time",TimestampType(), True),
@@ -33,7 +25,7 @@ AIS_SCHEMA = StructType([
     StructField("cog",           DoubleType(),    True),
     StructField("heading",       IntegerType(),   True),
     StructField("vessel_name",   StringType(),    True),
-    StructField("imo",           StringType(),    True),  # "IMO" prefix in raw data
+    StructField("imo",           StringType(),    True),
     StructField("call_sign",     StringType(),    True),
     StructField("vessel_type",   IntegerType(),   True),
     StructField("status",        IntegerType(),   True),
@@ -44,16 +36,16 @@ AIS_SCHEMA = StructType([
     StructField("transceiver",   StringType(),    True),
 ])
 
-os.makedirs(TMP_DIR, exist_ok=True)
+import os as _os
+_os.makedirs(TMP_DIR, exist_ok=True)
 spark.sql("CREATE DATABASE IF NOT EXISTS bronze")
 
-# ── Ingestion loop ─────────────────────────────────────────────────────────────
 for month in MONTHS:
     for day in DAYS:
-        filename  = f"ais-2024-{month}-{day:02d}.csv.zst"
-        url       = BASE_URL + filename
-        dst_zst   = f"{TMP_DIR}/{filename}"
-        dst_csv   = dst_zst[:-4]  # strip .zst
+        filename = f"ais-2024-{month}-{day:02d}.csv.zst"
+        url      = BASE_URL + filename
+        dst_zst  = f"{TMP_DIR}/{filename}"
+        dst_csv  = dst_zst[:-4]
 
         r = requests.get(url, timeout=300)
         if r.status_code != 200:
@@ -63,7 +55,6 @@ for month in MONTHS:
         with open(dst_zst, "wb") as f:
             f.write(r.content)
 
-        # Decompress .zst → .csv
         dctx = zstandard.ZstdDecompressor()
         with open(dst_zst, "rb") as src, open(dst_csv, "wb") as dst:
             dctx.copy_stream(src, dst)

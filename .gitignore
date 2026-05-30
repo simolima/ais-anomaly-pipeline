@@ -10,6 +10,7 @@ __pycache__/
 dbt/target/
 dbt/dbt_packages/
 dbt/logs/
+logs/
 dbt/profiles.yml
 
 # Data — never commit raw AIS files
