@@ -74,9 +74,10 @@ for month in MONTHS:
                 text_stream,
                 chunksize=CHUNK,
                 dtype=DTYPES,
-                parse_dates=["BaseDateTime"],
-                date_format="%Y-%m-%d %H:%M:%S",
             ):
+                chunk["BaseDateTime"] = pd.to_datetime(
+                    chunk["BaseDateTime"], format="%Y-%m-%d %H:%M:%S", errors="coerce"
+                )
                 chunk = chunk.rename(columns=RENAME)
                 df = (
                     spark.createDataFrame(chunk, schema=AIS_SCHEMA)
