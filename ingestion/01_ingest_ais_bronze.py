@@ -1,10 +1,27 @@
 import io
-import os
 import sys
 from datetime import date, timedelta
+from typing import Optional
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from ingestion.utils import compute_window
+
+def _parse_date(filename: str) -> Optional[date]:
+    try:
+        return date(int(filename[4:8]), int(filename[9:11]), int(filename[12:14]))
+    except (ValueError, IndexError):
+        return None
+
+
+def _compute_window(
+    ingested_files: set,
+    window_days: int,
+    end_date: date,
+    default_start: date = date(2024, 1, 1),
+) -> Optional[tuple]:
+    dates = [d for f in ingested_files if (d := _parse_date(f)) is not None]
+    start = max(dates) + timedelta(days=1) if dates else default_start
+    if start > end_date:
+        return None
+    return start, min(start + timedelta(days=window_days - 1), end_date)
 
 import pandas as pd
 import requests
@@ -60,7 +77,7 @@ try:
 except Exception:
     ingested_files = set()
 
-window = compute_window(ingested_files, WINDOW_DAYS, END_DATE)
+window = _compute_window(ingested_files, WINDOW_DAYS, END_DATE)
 if window is None:
     print("All 2024 data already ingested. Nothing to do.")
     sys.exit(0)
