@@ -77,4 +77,10 @@ for month in MONTHS:
 
         print(f"ok    {filename} — {total_rows:,} rows")
 
+spark.sql("""
+    CREATE TABLE IF NOT EXISTS bronze.ais_raw
+    USING DELTA
+    LOCATION 'dbfs:/delta/bronze/ais_raw'
+""")
+
 print(f"\nDone. Total rows in {TARGET}: {spark.read.format('delta').load(TARGET).count():,}")
