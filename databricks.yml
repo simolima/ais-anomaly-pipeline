@@ -21,6 +21,10 @@ resources:
   jobs:
     ais_pipeline:
       name: "AIS Anomaly Pipeline"
+      schedule:
+        quartz_cron_expression: "0 0 * ? * *"
+        timezone_id: "UTC"
+        pause_status: UNPAUSED
       tasks:
         - task_key: ingest_ais
           spark_python_task:
