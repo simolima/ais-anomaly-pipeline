@@ -7,25 +7,60 @@ sources:
       - name: ais_raw
         description: Raw AIS broadcast points from NOAA MarineCadastre (CC0)
         columns:
-          - name: MMSI
+          - name: mmsi
             description: Maritime Mobile Service Identity
-          - name: BaseDateTime
+            tests:
+              - not_null
+          - name: base_date_time
             description: UTC timestamp of the AIS broadcast
-          - name: LAT
-          - name: LON
-          - name: SOG
-            description: Speed Over Ground (knots)
-          - name: COG
+            tests:
+              - not_null
+          - name: latitude
+            description: Latitude in decimal degrees (-90 to 90)
+            tests:
+              - not_null
+          - name: longitude
+            description: Longitude in decimal degrees (-180 to 180)
+            tests:
+              - not_null
+          - name: sog
+            description: Speed Over Ground (knots, 0-102.2)
+          - name: cog
             description: Course Over Ground (degrees)
-          - name: VesselName
-          - name: IMO
-          - name: VesselType
+          - name: heading
+            description: True heading (degrees, nullable)
+          - name: vessel_name
+          - name: imo
+          - name: call_sign
+          - name: vessel_type
+          - name: status
+          - name: length
+          - name: width
+          - name: draft
+          - name: cargo
+          - name: transceiver
+          - name: _ingestion_ts
+            description: Timestamp when the row was written to bronze
+            tests:
+              - not_null
+          - name: _source_file
+            description: Source filename (ais-YYYY-MM-DD.csv.zst)
+            tests:
+              - not_null
 
       - name: sanctions
         description: Sanctioned vessel entities from OpenSanctions
         columns:
+          - name: entity_id
+            tests:
+              - not_null
+              - unique
+          - name: entity_name
           - name: mmsi
           - name: imo_number
-          - name: entity_name
+          - name: flag
           - name: sanctions_list
           - name: designation_date
+          - name: _ingestion_ts
+            tests:
+              - not_null

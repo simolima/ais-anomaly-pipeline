@@ -2,6 +2,8 @@ import io
 import sys
 from datetime import date, timedelta
 
+from ingestion.utils import compute_window
+
 import pandas as pd
 import requests
 import zstandard
@@ -48,28 +50,20 @@ DTYPES = {
 
 spark.sql("CREATE DATABASE IF NOT EXISTS bronze")
 
-# Determine start date from already-ingested files
 try:
     ingested_files = {
         row._source_file
         for row in spark.table(TARGET).select("_source_file").distinct().collect()
     }
-    dates_ingested = []
-    for f in ingested_files:
-        try:
-            dates_ingested.append(date(int(f[4:8]), int(f[9:11]), int(f[12:14])))
-        except (ValueError, IndexError):
-            pass
-    start_date = max(dates_ingested) + timedelta(days=1) if dates_ingested else date(2024, 1, 1)
 except Exception:
     ingested_files = set()
-    start_date = date(2024, 1, 1)
 
-if start_date > END_DATE:
+window = compute_window(ingested_files, WINDOW_DAYS, END_DATE)
+if window is None:
     print("All 2024 data already ingested. Nothing to do.")
     sys.exit(0)
 
-end_date = min(start_date + timedelta(days=WINDOW_DAYS - 1), END_DATE)
+start_date, end_date = window
 print(f"Window: {start_date} -> {end_date}")
 
 current = start_date

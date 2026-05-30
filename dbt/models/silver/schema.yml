@@ -1,0 +1,34 @@
+version: 2
+
+models:
+  - name: ais_clean
+    description: >
+      Deduplicated and validated AIS positions. Removes exact duplicates,
+      stale retransmissions, and rows with out-of-range coordinates or speed.
+    columns:
+      - name: mmsi
+        description: Maritime Mobile Service Identity
+        tests:
+          - not_null
+      - name: base_date_time
+        description: UTC timestamp of the AIS broadcast
+        tests:
+          - not_null
+      - name: latitude
+        description: Latitude in decimal degrees
+        tests:
+          - not_null
+      - name: longitude
+        description: Longitude in decimal degrees
+        tests:
+          - not_null
+      - name: sog
+        description: Speed Over Ground (knots)
+        tests:
+          - not_null
+      - name: quality_flag
+        description: Should always be null — rows with quality issues are filtered out
+        tests:
+          - accepted_values:
+              values: [null]
+              quote: false

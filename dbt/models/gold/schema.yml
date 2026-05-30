@@ -1,0 +1,78 @@
+version: 2
+
+models:
+  - name: ais_dark_gaps
+    description: >
+      Vessels that disappeared from AIS for 6+ hours — a common indicator
+      of intentional transponder deactivation.
+    columns:
+      - name: mmsi
+        tests:
+          - not_null
+      - name: gap_start
+        tests:
+          - not_null
+      - name: gap_end
+        tests:
+          - not_null
+      - name: gap_hours
+        description: Must be >= 6 by definition (filter in model)
+        tests:
+          - not_null
+      - name: anomaly_type
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['dark_gap']
+      - name: anomaly_score
+        description: Normalised 0-1 score (gap_hours / 24, capped at 1)
+        tests:
+          - not_null
+
+  - name: ais_impossible_speed
+    description: >
+      Vessel movements implying a speed > 30 knots between consecutive
+      AIS pings — physically impossible for cargo/tanker vessels.
+    columns:
+      - name: mmsi
+        tests:
+          - not_null
+      - name: event_start
+        tests:
+          - not_null
+      - name: event_end
+        tests:
+          - not_null
+      - name: implied_speed_knots
+        description: Must be > 30 by definition (filter in model)
+        tests:
+          - not_null
+      - name: anomaly_type
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['impossible_speed']
+      - name: anomaly_score
+        description: Normalised 0-1 score, capped at 1
+        tests:
+          - not_null
+
+  - name: ais_anomaly_cues
+    description: >
+      Union of all anomaly types enriched with OpenSanctions vessel data.
+      Primary output table for downstream alerting and dashboards.
+    columns:
+      - name: mmsi
+        tests:
+          - not_null
+      - name: event_ts
+        tests:
+          - not_null
+      - name: anomaly_type
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['dark_gap', 'impossible_speed']
+      - name: anomaly_score
+        tests:
+          - not_null
