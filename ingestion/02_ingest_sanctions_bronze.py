@@ -3,6 +3,7 @@ import json
 import requests
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import current_timestamp
+from pyspark.sql.types import StructType, StructField, StringType
 
 spark = SparkSession.builder.getOrCreate()
 
@@ -35,6 +36,16 @@ with requests.get(BULK_URL, stream=True, timeout=300) as r:
 
 print(f"Found {len(vessel_rows):,} sanctioned vessels.")
 
-df = spark.createDataFrame(vessel_rows).withColumn("_ingestion_ts", current_timestamp())
+SCHEMA = StructType([
+    StructField("entity_id",        StringType(), True),
+    StructField("entity_name",      StringType(), True),
+    StructField("mmsi",             StringType(), True),
+    StructField("imo_number",       StringType(), True),
+    StructField("flag",             StringType(), True),
+    StructField("sanctions_list",   StringType(), True),
+    StructField("designation_date", StringType(), True),
+])
+
+df = spark.createDataFrame(vessel_rows, schema=SCHEMA).withColumn("_ingestion_ts", current_timestamp())
 df.write.format("delta").mode("overwrite").saveAsTable(TARGET)
 print(f"Written to {TARGET}.")
