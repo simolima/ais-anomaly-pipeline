@@ -43,6 +43,7 @@ DTYPES = {
     "call_sign": str, "transceiver": str,
 }
 
+spark.sql("USE CATALOG hive_metastore")
 spark.sql("CREATE DATABASE IF NOT EXISTS bronze")
 
 for month in MONTHS:
