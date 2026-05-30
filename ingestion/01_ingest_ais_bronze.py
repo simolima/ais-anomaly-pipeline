@@ -13,7 +13,7 @@ from pyspark.sql.types import (
 spark = SparkSession.builder.getOrCreate()
 
 BASE_URL = "https://noaaocm.blob.core.windows.net/ais/csv2/csv2024/"
-TARGET   = "bronze.ais_raw"
+TARGET   = "dbfs:/delta/bronze/ais_raw"
 MONTHS   = ["01"]
 DAYS     = range(1, 32)
 CHUNK    = 50_000
@@ -43,8 +43,6 @@ DTYPES = {
     "call_sign": str, "transceiver": str,
 }
 
-spark.sql("USE CATALOG hive_metastore")
-spark.sql("CREATE DATABASE IF NOT EXISTS bronze")
 
 for month in MONTHS:
     for day in DAYS:
@@ -74,9 +72,9 @@ for month in MONTHS:
                     .withColumn("_ingestion_ts", current_timestamp())
                     .withColumn("_source_file",  lit(filename))
                 )
-                df.write.format("delta").mode("append").saveAsTable(TARGET)
+                df.write.format("delta").mode("append").save(TARGET)
                 total_rows += len(chunk)
 
         print(f"ok    {filename} — {total_rows:,} rows")
 
-print(f"\nDone. Total rows in {TARGET}: {spark.table(TARGET).count():,}")
+print(f"\nDone. Total rows in {TARGET}: {spark.read.format('delta').load(TARGET).count():,}")
