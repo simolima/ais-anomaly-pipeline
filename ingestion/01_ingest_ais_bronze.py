@@ -16,7 +16,8 @@ BASE_URL = "https://noaaocm.blob.core.windows.net/ais/csv2/csv2024/"
 TARGET   = "bronze.ais_raw"
 MONTHS   = ["01"]
 DAYS     = range(1, 32)
-CHUNK    = 50_000
+CHUNK        = 50_000
+WRITE_EVERY  = 10        # scrivi su Delta ogni 10 chunk (= 500k righe)
 
 AIS_SCHEMA = StructType([
     StructField("mmsi",          StringType(),    True),
@@ -55,29 +56,38 @@ for month in MONTHS:
             print(f"skip  {filename} — {r.status_code}")
             continue
 
-        dctx   = zstandard.ZstdDecompressor()
-        chunks = []
+        dctx       = zstandard.ZstdDecompressor()
+        buffer     = []
+        total_rows = 0
+
+        def flush(buf):
+            pdf = pd.concat(buf, ignore_index=True)
+            (
+                spark.createDataFrame(pdf, schema=AIS_SCHEMA)
+                .withColumn("_ingestion_ts", current_timestamp())
+                .withColumn("_source_file",  lit(filename))
+                .write.format("delta").mode("append").saveAsTable(TARGET)
+            )
+            return len(pdf)
 
         with dctx.stream_reader(r.raw) as zst_stream:
             text_stream = io.TextIOWrapper(zst_stream, encoding="utf-8")
-            for chunk in pd.read_csv(
+            for i, chunk in enumerate(pd.read_csv(
                 text_stream,
                 chunksize=CHUNK,
                 dtype=DTYPES,
-            ):
+            ), start=1):
                 chunk["base_date_time"] = pd.to_datetime(
                     chunk["base_date_time"], format="%Y-%m-%d %H:%M:%S", errors="coerce"
                 )
-                chunks.append(chunk)
+                buffer.append(chunk)
+                if i % WRITE_EVERY == 0:
+                    total_rows += flush(buffer)
+                    buffer = []
 
-        pdf = pd.concat(chunks, ignore_index=True)
-        df  = (
-            spark.createDataFrame(pdf, schema=AIS_SCHEMA)
-            .withColumn("_ingestion_ts", current_timestamp())
-            .withColumn("_source_file",  lit(filename))
-        )
-        df.write.format("delta").mode("append").saveAsTable(TARGET)
+        if buffer:
+            total_rows += flush(buffer)
 
-        print(f"ok    {filename} — {len(pdf):,} rows")
+        print(f"ok    {filename} — {total_rows:,} rows")
 
 print(f"\nDone. Total rows in {TARGET}: {spark.table(TARGET).count():,}")
