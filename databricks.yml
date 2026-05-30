@@ -70,3 +70,4 @@ resources:
               - requests
               - scikit-learn
               - pandas
+              - dbt-databricks
