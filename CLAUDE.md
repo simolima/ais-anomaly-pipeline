@@ -202,6 +202,14 @@ databricks bundle run dbt_transform  # dbt schema tests on live data
 
 ---
 
+## Lessons learned
+
+- **Create a named catalog before writing any code.** Tables currently live in `workspace.bronze.*` (Databricks default). In a real project, create `CREATE CATALOG ais_pipeline` first, then `CREATE SCHEMA ais_pipeline.bronze` etc. Migrating data after the fact is expensive.
+- **Databricks Free Edition is not representative of a real environment.** hive_metastore is gone, DBFS root is disabled, UC S3 has CRC restrictions. Patterns that work here may not be the right patterns for production.
+- **Test the data source before designing the schema.** The original schema used legacy NOAA column names (uppercase). The actual files use snake_case. Always download a sample file first.
+
+---
+
 ## Known issues
 
 - **S3 CRC error** (`400 Bad Request` on `HEAD` to UC S3): occurs when Delta commit frequency is too high. Mitigated by `WRITE_EVERY=50`. If it recurs, increase further.
