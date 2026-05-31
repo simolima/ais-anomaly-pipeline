@@ -220,26 +220,32 @@ Every silver/gold model is driven by an `event_date` window. With 2B+ rows in
 - **Removed** the legacy global `no_retransmissions` dedup in `ais_clean`: it collapsed
   moored-vessel timelines and produced false dark gaps, and was globally scoped.
 
-The window is resolved by the `ais_window()` macro (`dbt/macros/ais_window.sql`), in
-priority order: explicit `start_date`+`end_date` → `rolling_days` → no-op sentinel.
+The window is resolved by the `ais_window()` macro (`dbt/macros/ais_window.sql`): explicit
+`start_date`+`end_date` vars → otherwise the 2999-01-01 no-op sentinel. The job normally
+supplies those vars from the `compute_window` task (see below).
 
 ```bash
 # Explicit window / reprocess (delete+reinsert only those days):
 dbt run  --vars '{start_date: 2024-03-01, end_date: 2024-03-07}'
 dbt test --vars '{start_date: 2024-03-01, end_date: 2024-03-07}'
 
-# Rolling window — the NORMAL scheduled mode: process the last N days [today-N, today]:
-dbt run  --vars '{rolling_days: 7}'
-
 # Initial load: run successive explicit windows (avoids a 2B-row full build).
 # Full rebuild (small datasets only): dbt run --full-refresh  (NO vars — never combine
 # --full-refresh with vars, it would wipe the table down to a single window).
 ```
 
-The `ais_dbt` job exposes `rolling_days` (default `7`) plus empty `start_date` / `end_date`
-params. **Scheduled runs use the rolling 7-day window**; setting the date params overrides
-it for a manual reprocess. The schedule is defined but **PAUSED** — unpause when going live.
-The daily 7-day overlap also keeps boundary anomalies fresh (see reprocessing caveat below).
+**Watermark-advancing schedule.** The data is fixed (2024), so the normal mode is NOT a
+date-relative rolling window — it advances one 7-day window per run from the max date
+already transformed. The `ais_dbt` job runs `orchestration/compute_window.py` first: it
+reads `max(event_date)` from `silver.ais_clean`, computes `[max+1, max+7]` (capped at
+2024-12-31, mirroring the bronze ingestion's `_compute_window`), and sets it as task values
+that the dbt task consumes via `{{tasks.compute_window.values.start_date}}`. Trigger the job
+repeatedly (or let the daily schedule fire) to walk the whole year a week at a time; once
+2024 is fully transformed `compute_window` emits the 2999 sentinel and the run no-ops. The
+window is computed once, before any model runs, so silver and gold process the same week
+(computing it inside dbt would be wrong — by the time the gold models run, silver has
+already advanced). To reprocess a specific window, trigger with the `start_date`/`end_date`
+job params set. The schedule is defined but **PAUSED** — unpause when going live.
 
 ### Migration & reprocessing caveats
 
@@ -252,8 +258,8 @@ The daily 7-day overlap also keeps boundary anomalies fresh (see reprocessing ca
   forward, so re-running window W with corrected data does not refresh the first anomaly
   in W+1 (which depended on W's last ping). NOAA files are immutable, so a reprocess
   normally reproduces identical results. If you ever reprocess *corrected* data, also
-  reprocess the following window. The rolling daily 7-day window mitigates this in normal
-  operation by re-deriving recent boundaries every day.
+  reprocess the following window. In normal forward operation this never bites: each window
+  is built after the previous one, so boundaries are computed from already-final data.
 - **`dbt test` is not windowed yet**: generic tests (`not_null`, `accepted_values`) scan
   the whole target relation regardless of `--vars`. On 2B-row tables this is a full scan
   each run — open item, window the tests with a `where` config if it becomes a problem.

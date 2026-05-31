@@ -48,15 +48,15 @@ resources:
               - requests
               - pandas
 
-    # Normal operation: runs daily and processes a rolling last-7-days window
-    # (rolling_days=7), so late-arriving data and boundary anomalies are continuously
-    # refreshed (replace_where is idempotent). The schedule is PREPARED but PAUSED —
-    # flip pause_status to UNPAUSED when ready to go live.
+    # Normal operation: runs daily and advances ONE 7-day window per run through 2024,
+    # starting from the max date already transformed into silver.ais_clean (mirrors the
+    # bronze ingestion). Trigger it repeatedly (or let the schedule fire daily) to walk
+    # the whole year a week at a time; once 2024 is fully transformed it no-ops.
+    # The schedule is PREPARED but PAUSED — flip pause_status to UNPAUSED when going live.
     #
-    # Window resolution (see dbt/macros/ais_window.sql):
-    #   - scheduled run        -> start_date/end_date empty, rolling_days=7  -> [today-7, today]
-    #   - manual reprocess     -> set start_date/end_date params             -> explicit window
-    # Empty string params count as "not set", so explicit dates override the rolling window.
+    # Window resolution:
+    #   - compute_window reads the watermark and sets start_date/end_date task values
+    #   - to reprocess a specific window, trigger with the start_date/end_date job params set
     ais_dbt:
       name: "AIS dbt Transform"
       schedule:
@@ -64,19 +64,27 @@ resources:
         timezone_id: "UTC"
         pause_status: PAUSED
       parameters:
-        - name: rolling_days
-          default: "7"
         - name: start_date
           default: ""
         - name: end_date
           default: ""
       tasks:
+        - task_key: compute_window
+          spark_python_task:
+            python_file: ${workspace.file_path}/orchestration/compute_window.py
+            parameters:
+              - "{{job.parameters.start_date}}"
+              - "{{job.parameters.end_date}}"
+          environment_key: default
+
         - task_key: dbt_transform
+          depends_on:
+            - task_key: compute_window
           dbt_task:
             project_directory: ${workspace.file_path}/dbt
             commands:
-              - "dbt run  --vars '{\"start_date\": \"{{job.parameters.start_date}}\", \"end_date\": \"{{job.parameters.end_date}}\", \"rolling_days\": \"{{job.parameters.rolling_days}}\"}'"
-              - "dbt test --vars '{\"start_date\": \"{{job.parameters.start_date}}\", \"end_date\": \"{{job.parameters.end_date}}\", \"rolling_days\": \"{{job.parameters.rolling_days}}\"}'"
+              - "dbt run  --vars '{\"start_date\": \"{{tasks.compute_window.values.start_date}}\", \"end_date\": \"{{tasks.compute_window.values.end_date}}\"}'"
+              - "dbt test --vars '{\"start_date\": \"{{tasks.compute_window.values.start_date}}\", \"end_date\": \"{{tasks.compute_window.values.end_date}}\"}'"
             warehouse_id: ${var.warehouse_id}
           environment_key: default
 
