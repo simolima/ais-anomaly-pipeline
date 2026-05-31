@@ -60,7 +60,7 @@ resources:
     ais_dbt:
       name: "AIS dbt Transform"
       schedule:
-        quartz_cron_expression: "0 0 6 * ? * *"
+        quartz_cron_expression: "0 0 6 * * ?"
         timezone_id: "UTC"
         pause_status: PAUSED
       parameters:
