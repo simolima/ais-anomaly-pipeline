@@ -1,5 +1,11 @@
-import math
-import os
+"""Vessel-centric anomaly alert.
+
+Reads the per-vessel risk scores (gold.vessel_risk_scores), takes the top-N vessels by
+risk_score above a threshold, and emails an HTML summary of their behaviour. No per-event
+drill-down — the alert answers "which vessels should an analyst look at first".
+"""
+
+import sys
 import smtplib
 from datetime import date
 from email.mime.multipart import MIMEMultipart
@@ -11,90 +17,66 @@ from pyspark.dbutils import DBUtils
 spark   = SparkSession.builder.getOrCreate()
 dbutils = DBUtils(spark)
 
-SCORE_THRESHOLD = 0.7
+RISK_THRESHOLD = 0.7   # only alert on vessels at/above this risk_score
+TOP_N          = 20
+
+# Path to the recipients CSV. Passed explicitly as the first task parameter
+# (${workspace.file_path}/config/alert_recipients.csv) because the script cannot discover
+# its own location on Databricks — __file__ is undefined in the exec context. Falls back to
+# a repo-relative path for local runs.
+RECIPIENTS_CSV = sys.argv[1] if len(sys.argv) > 1 else "config/alert_recipients.csv"
 
 
-def _f(v):
+def _i(v):
     try:
-        return f"{float(v):.4f}" if v is not None and not math.isnan(float(v)) else "—"
+        return str(int(v))
     except (TypeError, ValueError):
         return "—"
 
 
-def _v(v):
-    return str(v) if v else "—"
+def _f(v, nd=1):
+    try:
+        return f"{float(v):.{nd}f}"
+    except (TypeError, ValueError):
+        return "—"
 
 
-outliers = spark.sql(f"""
-    SELECT mmsi, vessel_name, event_ts, anomaly_type, anomaly_score, sanctions_match, lat, lon
+vessels = spark.sql(f"""
+    SELECT mmsi, vessel_name, risk_score,
+           n_dark_gaps, max_gap_hours,
+           n_impossible_speed, max_implied_speed,
+           total_anomalies, is_sanctioned
     FROM gold.vessel_risk_scores
-    WHERE is_outlier = true AND anomaly_score >= {SCORE_THRESHOLD}
-    ORDER BY anomaly_score DESC
-    LIMIT 50
+    WHERE is_outlier = true AND risk_score >= {RISK_THRESHOLD}
+    ORDER BY risk_score DESC
+    LIMIT {TOP_N}
 """).toPandas()
 
-if outliers.empty:
-    print("No outliers above threshold — no alert sent.")
+if vessels.empty:
+    print("No vessels above risk threshold — no alert sent.")
     raise SystemExit(0)
 
-dark_gaps = spark.sql("""
-    SELECT mmsi, gap_start, gap_hours,
-           last_known_lat, last_known_lon,
-           reappearance_lat, reappearance_lon
-    FROM gold.ais_dark_gaps
-""").toPandas()
-
-df = outliers.merge(dark_gaps, left_on=["mmsi", "event_ts"],
-                    right_on=["mmsi", "gap_start"], how="left")
-
-
-def calc_distance(row):
-    if row["anomaly_type"] == "dark_gap":
-        try:
-            R = 3440.065
-            lat1, lon1 = float(row["last_known_lat"]), float(row["last_known_lon"])
-            lat2, lon2 = float(row["reappearance_lat"]), float(row["reappearance_lon"])
-            dlat = math.radians(lat2 - lat1)
-            dlon = math.radians(lon2 - lon1)
-            a = math.sin(dlat/2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon/2)**2
-            return round(R * 2 * math.asin(math.sqrt(a)), 1)
-        except (TypeError, ValueError):
-            pass
-    return None
-
-
-df["distance_nm"] = df.apply(calc_distance, axis=1)
-
 rows_html = ""
-for _, r in df.iterrows():
-    sanctions = (f'<td style="color:#b30000;font-weight:bold">{r["sanctions_match"]}</td>'
-                 if r.get("sanctions_match") else "<td>—</td>")
-    if r["anomaly_type"] == "dark_gap":
-        disappeared = f"{_f(r.get('last_known_lat'))}°N  {_f(r.get('last_known_lon'))}°E"
-        reappeared  = f"{_f(r.get('reappearance_lat'))}°N  {_f(r.get('reappearance_lon'))}°E"
-        movement    = f"{_v(r.get('gap_hours'))} h gap · {_v(r.get('distance_nm'))} nm"
-    else:
-        disappeared = f"{_f(r.get('lat'))}°N  {_f(r.get('lon'))}°E"
-        reappeared  = "—"
-        movement    = "impossible speed"
-
+for _, r in vessels.iterrows():
+    sanctioned = ('<td style="color:#b30000;font-weight:bold">SANCTIONED</td>'
+                  if int(r["is_sanctioned"]) == 1 else "<td>—</td>")
     rows_html += f"""
     <tr>
-      <td>{_v(r['vessel_name'])}</td><td>{r['mmsi']}</td>
-      <td>{r['anomaly_type'].replace('_', ' ')}</td>
-      <td>{disappeared}</td><td>{reappeared}</td>
-      <td>{movement}</td><td>{r['anomaly_score']:.2f}</td>
-      {sanctions}
+      <td>{r['vessel_name'] or '—'}</td><td>{r['mmsi']}</td>
+      <td style="font-weight:bold">{_f(r['risk_score'], 3)}</td>
+      <td>{_i(r['n_dark_gaps'])} · max {_f(r['max_gap_hours'])} h</td>
+      <td>{_i(r['n_impossible_speed'])} · max {_f(r['max_implied_speed'])} kn</td>
+      <td>{_i(r['total_anomalies'])}</td>
+      {sanctioned}
     </tr>"""
 
 html = f"""<html><body style="font-family:sans-serif;max-width:960px;margin:auto">
-  <h2 style="color:#1a1a2e">AIS Anomaly Report — {date.today()}</h2>
-  <p style="color:#555">{len(df)} vessel{'s' if len(df) != 1 else ''} flagged &middot; score &ge; {SCORE_THRESHOLD}</p>
+  <h2 style="color:#1a1a2e">AIS Vessel Risk Report — {date.today()}</h2>
+  <p style="color:#555">Top {len(vessels)} vessel{'s' if len(vessels) != 1 else ''} by risk score &middot; risk &ge; {RISK_THRESHOLD}</p>
   <table border="1" cellpadding="6" cellspacing="0" style="border-collapse:collapse;width:100%;font-size:13px">
     <thead style="background:#1a1a2e;color:white">
-      <tr><th>Vessel</th><th>MMSI</th><th>Anomaly</th>
-      <th>Disappeared at</th><th>Reappeared at</th>
-      <th>Movement</th><th>Score</th><th>Sanctions</th></tr>
+      <tr><th>Vessel</th><th>MMSI</th><th>Risk</th>
+      <th>Dark gaps</th><th>Speed jumps</th><th>Total anomalies</th><th>Sanctions</th></tr>
     </thead>
     <tbody>{rows_html}</tbody>
   </table>
@@ -102,20 +84,22 @@ html = f"""<html><body style="font-family:sans-serif;max-width:960px;margin:auto
 </body></html>"""
 
 plain = "\n".join(
-    f"{r['vessel_name']} | {r['mmsi']} | {r['anomaly_type']} | score {r['anomaly_score']:.2f}"
-    for _, r in df.iterrows()
+    f"{r['vessel_name'] or '—'} | {r['mmsi']} | risk {float(r['risk_score']):.3f} | "
+    f"{int(r['total_anomalies'])} anomalies"
+    + (" | SANCTIONED" if int(r["is_sanctioned"]) == 1 else "")
+    for _, r in vessels.iterrows()
 )
 
-_config = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                       "../config/alert_recipients.csv")
-with open(_config) as f:
-    recipients = [l.strip() for l in f if l.strip() and l.strip() != "email"]
+# Recipients come from the CSV (header line "email", then one address per line). Sender and
+# password stay in the Databricks secret scope — they must never live in a plaintext file.
+with open(RECIPIENTS_CSV) as f:
+    recipients = [l.strip() for l in f if l.strip() and l.strip().lower() != "email"]
 
 sender   = dbutils.secrets.get("ais_secrets", "ALERT_EMAIL_FROM")
 password = dbutils.secrets.get("ais_secrets", "ALERT_EMAIL_PASSWORD")
 
 msg = MIMEMultipart("alternative")
-msg["Subject"] = f"[AIS Alert] {len(df)} anomal{'y' if len(df) == 1 else 'ies'} — {date.today()}"
+msg["Subject"] = f"[AIS Alert] {len(vessels)} high-risk vessel{'s' if len(vessels) != 1 else ''} — {date.today()}"
 msg["From"]    = sender
 msg["To"]      = ", ".join(recipients)
 msg.attach(MIMEText(plain, "plain"))
@@ -125,4 +109,4 @@ with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
     server.login(sender, password)
     server.sendmail(sender, recipients, msg.as_string())
 
-print(f"Alert sent to {recipients} — {len(df)} anomalies.")
+print(f"Alert sent to {recipients} — {len(vessels)} vessels.")

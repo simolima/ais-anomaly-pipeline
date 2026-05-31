@@ -89,11 +89,12 @@ silver.ais_clean        ← deduplicated, validated, no bad coords/speed
         ↓ dbt
 gold.ais_dark_gaps      ← AIS silence ≥ 6 hours per vessel
 gold.ais_impossible_speed ← implied speed > 30 knots
-gold.ais_anomaly_cues   ← union of all anomalies + sanctions join
+gold.ais_anomaly_cues   ← union of all anomalies + sanctions join (per-event detail)
+gold.vessel_features    ← per-vessel behavioural aggregates (feature table for ML)
         ↓
-ml/isolation_forest.py  ← unsupervised anomaly scoring
+ml/isolation_forest.py  ← per-vessel Isolation Forest → gold.vessel_risk_scores
         ↓
-alerts/send_alert.py    ← dispatch on high-scoring anomalies
+alerts/send_alert.py    ← email top-N vessels by risk_score
 ```
 
 ---

@@ -73,6 +73,8 @@ resources:
             - task_key: ml_scoring
           spark_python_task:
             python_file: ${workspace.file_path}/alerts/send_alert.py
+            parameters:
+              - ${workspace.file_path}/config/alert_recipients.csv
           environment_key: default
 
       environments:
