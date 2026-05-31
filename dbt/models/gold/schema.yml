@@ -88,3 +88,24 @@ models:
         description: Date of the in-window detecting ping — window key for incremental replace_where
         tests:
           - not_null
+
+  - name: vessel_features
+    description: >
+      Per-vessel behavioural fingerprint (one row per vessel with at least one anomaly),
+      the feature table consumed by ml/isolation_forest.py.
+    columns:
+      - name: mmsi
+        tests:
+          - not_null
+          - unique
+      - name: total_anomalies
+        description: n_dark_gaps + n_impossible_speed; >= 1 by construction
+        tests:
+          - not_null
+      - name: is_sanctioned
+        description: 1 if the MMSI matches an OpenSanctions entity, else 0
+        tests:
+          - not_null
+          - accepted_values:
+              values: [0, 1]
+              quote: false
