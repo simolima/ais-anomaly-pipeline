@@ -159,6 +159,19 @@ State is tracked via the `_source_file` column in `bronze.ais_raw`:
 
 ---
 
+## Git & CI workflow
+
+**Never commit directly to `main`.** All changes go through a pull request:
+
+1. Create a branch: `git checkout -b <type>/<short-desc>` (e.g. `feat/…`, `fix/…`, `docs/…`)
+2. Commit on the branch (single commit unless the change is genuinely separable)
+3. Push the branch and open a PR against `main` with `gh pr create`
+4. CI (`.github/workflows/ci.yml`) runs on the PR: **pytest + `dbt parse`**. It must pass before merge.
+5. Merge to `main` → `.github/workflows/deploy.yml` runs `databricks bundle deploy --target prod`
+
+So: **CI tests gate the PR, deploy happens on merge.** Direct pushes to `main` bypass the
+test gate — don't do it. Enable branch protection (require the `CI` check) so this is enforced.
+
 ## Running locally
 
 ```bash
@@ -184,10 +197,38 @@ databricks bundle run ais_ingest --target prod
 
 - Profile: `ais_databricks` (defined in `~/.dbt/profiles.yml`)
 - Catalog: `workspace` (Unity Catalog, Free Edition default)
-- Silver models: `+materialized: table`, schema `silver`
-- Gold models: `+materialized: table`, schema `gold`
+- Silver/gold models are **incremental** (`incremental_strategy='replace_where'`), schemas `silver` / `gold`
 - All models have a corresponding `schema.yml` with `not_null` and `accepted_values` tests
 - `sources.yml` defines `bronze.ais_raw` and `bronze.sanctions` with column-level tests
+
+### Incremental (windowed) processing
+
+Every silver/gold model is driven by an `event_date` window. With 2B+ rows in
+`bronze.ais_raw`, a full refresh is infeasible on Serverless — always process a window.
+
+- **`event_date`** is the window/replace_where key on every model. It is anchored on the
+  **in-window ping**: the row date for `ais_clean`, the reappearance (`gap_end`) for
+  `ais_dark_gaps`, the second ping (`event_end`) for `ais_impossible_speed`, carried up
+  unchanged into `ais_anomaly_cues`. Never key on the gap/event *start* — it may sit in a
+  prior window and `replace_where` would reject rows outside the predicate.
+- **Lookback**: the gold LAG models need only the single prior ping per vessel before the
+  window (LAG looks one row back). They recompute it from `ais_clean` over `lookback_days`
+  (default 7) — durable and reprocess-safe, no mutable state table.
+- **Removed** the legacy global `no_retransmissions` dedup in `ais_clean`: it collapsed
+  moored-vessel timelines and produced false dark gaps, and was globally scoped.
+
+```bash
+# Windowed run / reprocess a window (delete+reinsert only those days):
+dbt run  --vars '{start_date: 2024-03-01, end_date: 2024-03-07}'
+dbt test --vars '{start_date: 2024-03-01, end_date: 2024-03-07}'
+
+# Initial load: run successive windows (avoids a 2B-row full build).
+# Full rebuild (small datasets only): dbt run --full-refresh  (NO vars — never combine
+# --full-refresh with vars, it would wipe the table down to a single window).
+```
+
+The `ais_dbt` job exposes `start_date` / `end_date` as job parameters. They default to
+`2999-01-01`, so a no-arg run is a **safe no-op** — always pass the dates when triggering.
 
 ---
 

@@ -1,16 +1,57 @@
-{{ config(materialized='table') }}
+{{ config(
+    materialized='incremental',
+    incremental_strategy='replace_where',
+    incremental_predicates=[
+        "event_date >= date'" ~ var('start_date', '2999-01-01') ~ "' and event_date <= date'" ~ var('end_date', '2999-01-01') ~ "'"
+    ]
+) }}
 
-with vessel_timeline as (
+-- Windowed incremental. event_date is anchored on the SECOND ping (event_end), which is
+-- always inside [start_date, end_date]; the first ping (event_start) may come from the
+-- lookback window.
+{% set has_window  = var('start_date', none) is not none %}
+{% set lookback_days = var('lookback_days', 7) %}
+
+with window_rows as (
+    select mmsi, vessel_name, base_date_time, latitude, longitude
+    from {{ ref('ais_clean') }}
+    {% if has_window %}
+    where event_date between date'{{ var("start_date") }}' and date'{{ var("end_date") }}'
+    {% endif %}
+),
+
+{% if has_window %}
+-- One prior ping per vessel strictly before the window (LAG only needs one row back).
+prior_ping as (
+    select mmsi, vessel_name, base_date_time, latitude, longitude
+    from (
+        select
+            mmsi, vessel_name, base_date_time, latitude, longitude,
+            row_number() over (partition by mmsi order by base_date_time desc) as rn
+        from {{ ref('ais_clean') }}
+        where event_date >= date_sub(date'{{ var("start_date") }}', {{ lookback_days }})
+          and event_date <  date'{{ var("start_date") }}'
+    )
+    where rn = 1
+),
+combined as (
+    select * from window_rows
+    union all
+    select mmsi, vessel_name, base_date_time, latitude, longitude from prior_ping
+),
+{% else %}
+combined as (
+    select * from window_rows
+),
+{% endif %}
+
+vessel_timeline as (
     select
-        mmsi,
-        vessel_name,
-        base_date_time,
-        latitude,
-        longitude,
+        mmsi, vessel_name, base_date_time, latitude, longitude,
         lag(base_date_time) over (partition by mmsi order by base_date_time) as prev_ts,
         lag(latitude)       over (partition by mmsi order by base_date_time) as prev_lat,
         lag(longitude)      over (partition by mmsi order by base_date_time) as prev_lon
-    from {{ ref('ais_clean') }}
+    from combined
 ),
 
 with_implied_speed as (
@@ -35,6 +76,10 @@ impossible as (
     from with_implied_speed
     -- 30 knots: conservative physical ceiling for cargo/tanker vessels
     where distance_nm / elapsed_hours > 30
+      {% if has_window %}
+      and cast(base_date_time as date)
+          between date'{{ var("start_date") }}' and date'{{ var("end_date") }}'
+      {% endif %}
 )
 
 select
@@ -48,6 +93,7 @@ select
     longitude      as to_lon,
     distance_nm,
     implied_speed_knots,
-    'impossible_speed'                                  as anomaly_type,
-    least((implied_speed_knots - 30) / 70.0, 1.0)      as anomaly_score
+    cast(base_date_time as date)                   as event_date,
+    'impossible_speed'                             as anomaly_type,
+    least((implied_speed_knots - 30) / 70.0, 1.0)  as anomaly_score
 from impossible

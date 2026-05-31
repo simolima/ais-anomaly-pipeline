@@ -1,0 +1,47 @@
+name: CI
+
+# Runs on every pull request targeting main. Branch protection should require this
+# workflow to pass before a PR can be merged (Settings → Branches → require status checks).
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Unit tests (pytest)
+        run: python -m pytest tests/ -v
+
+      - name: Write dbt CI profile (dummy creds — parse never connects)
+        run: |
+          mkdir -p ~/.dbt
+          cat > ~/.dbt/profiles.yml <<'EOF'
+          ais_databricks:
+            target: ci
+            outputs:
+              ci:
+                type: databricks
+                catalog: workspace
+                schema: silver
+                host: example.cloud.databricks.com
+                http_path: /sql/1.0/warehouses/ci-dummy
+                token: ci-dummy-token
+                threads: 1
+          EOF
+
+      - name: dbt parse (models compile cleanly)
+        working-directory: dbt
+        run: dbt parse --no-partial-parse
