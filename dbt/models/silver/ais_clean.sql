@@ -8,9 +8,9 @@
 ) }}
 
 -- Window-driven incremental model. The window is resolved by ais_window():
---   * explicit:  dbt run --vars '{start_date: X, end_date: Y}'   (manual run / reprocess)
---   * rolling:   dbt run --vars '{rolling_days: 7}'              (scheduled run: last 7 days)
---   * full:      dbt run --full-refresh                          (no vars -> all history)
+--   * explicit:   dbt run --vars '{start_date: X, end_date: Y}'  (manual run / reprocess)
+--   * scheduled:  the Databricks compute_window task passes the next watermark window
+--   * full:       dbt run --full-refresh                         (no vars -> all history)
 -- A windowed run atomically deletes+reinserts only the days in the window.
 {%- set window_start = win[0] -%}
 {%- set window_end   = win[1] -%}

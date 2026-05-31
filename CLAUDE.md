@@ -198,14 +198,15 @@ databricks bundle run ais_ingest --target prod
 
 - Profile: `ais_databricks` (defined in `~/.dbt/profiles.yml`)
 - Catalog: `workspace` (Unity Catalog, Free Edition default)
-- Silver/gold models are **incremental** (`incremental_strategy='replace_where'`), schemas `silver` / `gold`
+- The silver and gold **anomaly** models are **incremental** (`incremental_strategy='replace_where'`), schemas `silver` / `gold`; `gold.vessel_features` is a full `table` aggregate (per-vessel feature table for the ML), not windowed
 - All models have a corresponding `schema.yml` with `not_null` and `accepted_values` tests
 - `sources.yml` defines `bronze.ais_raw` and `bronze.sanctions` with column-level tests
 
 ### Incremental (windowed) processing
 
-Every silver/gold model is driven by an `event_date` window. With 2B+ rows in
-`bronze.ais_raw`, a full refresh is infeasible on Serverless — always process a window.
+Every silver/gold **anomaly** model is driven by an `event_date` window (`gold.vessel_features`
+is the exception — a full aggregate). With 2B+ rows in `bronze.ais_raw`, a full refresh is
+infeasible on Serverless — always process a window.
 
 - **`event_date`** is the window/replace_where key on every model. It is anchored on the
   **in-window ping**: the row date for `ais_clean`, the reappearance (`gap_end`) for
@@ -236,17 +237,25 @@ dbt test --vars '{start_date: 2024-03-01, end_date: 2024-03-07}'
 ```
 
 **Watermark-advancing schedule.** The data is fixed (2024), so the normal mode is NOT a
-date-relative rolling window — it advances one 7-day window per run from the max date
-already transformed. The `ais_dbt` job runs `orchestration/compute_window.py` first: it
-reads `max(event_date)` from `silver.ais_clean`, computes `[max+1, max+7]` (capped at
-2024-12-31, mirroring the bronze ingestion's `_compute_window`), and sets it as task values
-that the dbt task consumes via `{{tasks.compute_window.values.start_date}}`. Trigger the job
-repeatedly (or let the daily schedule fire) to walk the whole year a week at a time; once
-2024 is fully transformed `compute_window` emits the 2999 sentinel and the run no-ops. The
-window is computed once, before any model runs, so silver and gold process the same week
-(computing it inside dbt would be wrong — by the time the gold models run, silver has
-already advanced). To reprocess a specific window, trigger with the `start_date`/`end_date`
-job params set. The schedule is defined but **PAUSED** — unpause when going live.
+date-relative rolling window — it advances one 7-day window per run. The `ais_dbt` job has
+three tasks:
+
+1. `compute_window` (`orchestration/compute_window.py`) reads the watermark from the state
+   table `silver.dbt_window_state`, computes `[last_end+1, +7]` (capped at 2024-12-31,
+   mirroring the bronze ingestion's `_compute_window`), and sets it as task values.
+2. `dbt_transform` consumes the window via `{{tasks.compute_window.values.start_date}}`.
+3. `commit_window` (`orchestration/commit_window.py`) writes the processed end date back to
+   `silver.dbt_window_state` — **only runs if `dbt_transform` succeeded**.
+
+The watermark is an explicit state table, not `max(event_date)` in a data table, precisely
+so a partial failure (silver committed, a gold model failed) does NOT advance it: the next
+run reprocesses the same window (replace_where is idempotent) instead of skipping it. The
+window is computed once, before any model runs, so silver and gold process the same week.
+Trigger the job repeatedly (or let the daily schedule fire) to walk the year a week at a
+time; once 2024 is done `compute_window` emits the 2999 sentinel and the run no-ops. To
+reprocess a specific window, trigger with the `start_date`/`end_date` job params set (this
+does not move the forward watermark). The schedule is defined but **PAUSED** — unpause when
+going live.
 
 ### Migration & reprocessing caveats
 
@@ -261,9 +270,11 @@ job params set. The schedule is defined but **PAUSED** — unpause when going li
   normally reproduces identical results. If you ever reprocess *corrected* data, also
   reprocess the following window. In normal forward operation this never bites: each window
   is built after the previous one, so boundaries are computed from already-final data.
-- **`dbt test` is not windowed yet**: generic tests (`not_null`, `accepted_values`) scan
-  the whole target relation regardless of `--vars`. On 2B-row tables this is a full scan
-  each run — open item, window the tests with a `where` config if it becomes a problem.
+- **`dbt test` is not windowed**: generic tests (`not_null`, `accepted_values`) scan the
+  whole target relation regardless of `--vars`. On 2B-row tables that is a full scan, so
+  `dbt test` is **deliberately not in the scheduled `ais_dbt` job** (it runs `dbt run`
+  only). Run `dbt test` manually / on a full validation, or add window-aware `where` configs
+  before putting it back in the per-window schedule.
 
 ---
 

@@ -82,10 +82,23 @@ resources:
             - task_key: compute_window
           dbt_task:
             project_directory: ${workspace.file_path}/dbt
+            # dbt test is intentionally NOT run here: generic tests (not_null,
+            # accepted_values) scan the whole persisted relation regardless of --vars, so
+            # running them every windowed run would full-scan the 2B-row tables. Run
+            # `dbt test` separately (manually or on a full validation), or add window-aware
+            # `where` configs before adding it back to the per-window schedule.
             commands:
-              - "dbt run  --vars '{\"start_date\": \"{{tasks.compute_window.values.start_date}}\", \"end_date\": \"{{tasks.compute_window.values.end_date}}\"}'"
-              - "dbt test --vars '{\"start_date\": \"{{tasks.compute_window.values.start_date}}\", \"end_date\": \"{{tasks.compute_window.values.end_date}}\"}'"
+              - "dbt run --vars '{\"start_date\": \"{{tasks.compute_window.values.start_date}}\", \"end_date\": \"{{tasks.compute_window.values.end_date}}\"}'"
             warehouse_id: ${var.warehouse_id}
+          environment_key: default
+
+        # Advances the watermark only after dbt_transform succeeds (Databricks starts this
+        # task only on upstream success), so a partial failure does not skip the window.
+        - task_key: commit_window
+          depends_on:
+            - task_key: dbt_transform
+          spark_python_task:
+            python_file: ${workspace.file_path}/orchestration/commit_window.py
           environment_key: default
 
       environments:
