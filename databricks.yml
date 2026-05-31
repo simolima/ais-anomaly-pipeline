@@ -20,11 +20,13 @@ variables:
 resources:
   jobs:
 
-    # Runs hourly until all 2024 data is loaded; both ingestion scripts run in parallel
+    # Runs every 6 hours until all 2024 data is loaded; both ingestion scripts run in
+    # parallel. Each run advances one 7-day window, so the year loads in ~13 days — paced
+    # to stay within the Free Edition daily compute budget (hourly exhausted it).
     ais_ingest:
       name: "AIS Ingest Bronze"
       schedule:
-        quartz_cron_expression: "0 0 * ? * *"
+        quartz_cron_expression: "0 0 0/6 ? * *"
         timezone_id: "UTC"
         pause_status: UNPAUSED
       max_concurrent_runs: 1
