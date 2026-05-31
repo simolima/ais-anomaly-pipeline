@@ -28,6 +28,10 @@ models:
         description: Normalised 0-1 score (gap_hours / 24, capped at 1)
         tests:
           - not_null
+      - name: event_date
+        description: Date of the reappearance ping — window key for incremental replace_where
+        tests:
+          - not_null
 
   - name: ais_impossible_speed
     description: >
@@ -56,6 +60,10 @@ models:
         description: Normalised 0-1 score, capped at 1
         tests:
           - not_null
+      - name: event_date
+        description: Date of the second ping (event_end) — window key for incremental replace_where
+        tests:
+          - not_null
 
   - name: ais_anomaly_cues
     description: >
@@ -74,6 +82,10 @@ models:
           - accepted_values:
               values: ['dark_gap', 'impossible_speed']
       - name: anomaly_score
+        tests:
+          - not_null
+      - name: event_date
+        description: Date of the in-window detecting ping — window key for incremental replace_where
         tests:
           - not_null
 

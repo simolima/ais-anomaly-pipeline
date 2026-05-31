@@ -10,9 +10,8 @@ clean-targets: ["target", "dbt_packages"]
 
 models:
   ais_anomaly_pipeline:
+    # Materialization is set per-model (incremental, replace_where) — see the model files.
     silver:
       +schema: silver
-      +materialized: table
     gold:
       +schema: gold
-      +materialized: table

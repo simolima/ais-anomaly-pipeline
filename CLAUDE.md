@@ -160,6 +160,19 @@ State is tracked via the `_source_file` column in `bronze.ais_raw`:
 
 ---
 
+## Git & CI workflow
+
+**Never commit directly to `main`.** All changes go through a pull request:
+
+1. Create a branch: `git checkout -b <type>/<short-desc>` (e.g. `feat/…`, `fix/…`, `docs/…`)
+2. Commit on the branch (single commit unless the change is genuinely separable)
+3. Push the branch and open a PR against `main` with `gh pr create`
+4. CI (`.github/workflows/ci.yml`) runs on the PR: **pytest + `dbt parse`**. It must pass before merge.
+5. Merge to `main` → `.github/workflows/deploy.yml` runs `databricks bundle deploy --target prod`
+
+So: **CI tests gate the PR, deploy happens on merge.** Direct pushes to `main` bypass the
+test gate — don't do it. Enable branch protection (require the `CI` check) so this is enforced.
+
 ## Running locally
 
 ```bash
@@ -185,10 +198,83 @@ databricks bundle run ais_ingest --target prod
 
 - Profile: `ais_databricks` (defined in `~/.dbt/profiles.yml`)
 - Catalog: `workspace` (Unity Catalog, Free Edition default)
-- Silver models: `+materialized: table`, schema `silver`
-- Gold models: `+materialized: table`, schema `gold`
+- The silver and gold **anomaly** models are **incremental** (`incremental_strategy='replace_where'`), schemas `silver` / `gold`; `gold.vessel_features` is a full `table` aggregate (per-vessel feature table for the ML), not windowed
 - All models have a corresponding `schema.yml` with `not_null` and `accepted_values` tests
 - `sources.yml` defines `bronze.ais_raw` and `bronze.sanctions` with column-level tests
+
+### Incremental (windowed) processing
+
+Every silver/gold **anomaly** model is driven by an `event_date` window (`gold.vessel_features`
+is the exception — a full aggregate). With 2B+ rows in `bronze.ais_raw`, a full refresh is
+infeasible on Serverless — always process a window.
+
+- **`event_date`** is the window/replace_where key on every model. It is anchored on the
+  **in-window ping**: the row date for `ais_clean`, the reappearance (`gap_end`) for
+  `ais_dark_gaps`, the second ping (`event_end`) for `ais_impossible_speed`, carried up
+  unchanged into `ais_anomaly_cues`. Never key on the gap/event *start* — it may sit in a
+  prior window and `replace_where` would reject rows outside the predicate.
+- **Lookback**: the gold LAG models need only the single prior ping per vessel before the
+  window (LAG looks one row back). They recompute it from `ais_clean` over **all prior
+  history** (unbounded `event_date < start_date`) for full-history parity — durable and
+  reprocess-safe, no mutable state table. Cost: each windowed run scans the history before
+  the window to find that one prior ping; if this gets too heavy, cluster `ais_clean` by
+  `event_date` or introduce a per-vessel state table.
+- **Removed** the legacy global `no_retransmissions` dedup in `ais_clean`: it collapsed
+  moored-vessel timelines and produced false dark gaps, and was globally scoped.
+
+The window is resolved by the `ais_window()` macro (`dbt/macros/ais_window.sql`): explicit
+`start_date`+`end_date` vars → otherwise the 2999-01-01 no-op sentinel. The job normally
+supplies those vars from the `compute_window` task (see below).
+
+```bash
+# Explicit window / reprocess (delete+reinsert only those days):
+dbt run  --vars '{start_date: 2024-03-01, end_date: 2024-03-07}'
+dbt test --vars '{start_date: 2024-03-01, end_date: 2024-03-07}'
+
+# Initial load: run successive explicit windows (avoids a 2B-row full build).
+# Full rebuild (small datasets only): dbt run --full-refresh  (NO vars — never combine
+# --full-refresh with vars, it would wipe the table down to a single window).
+```
+
+**Watermark-advancing schedule.** The data is fixed (2024), so the normal mode is NOT a
+date-relative rolling window — it advances one 7-day window per run. The `ais_dbt` job has
+three tasks:
+
+1. `compute_window` (`orchestration/compute_window.py`) reads the watermark from the state
+   table `silver.dbt_window_state`, computes `[last_end+1, +7]` (capped at 2024-12-31,
+   mirroring the bronze ingestion's `_compute_window`), and sets it as task values.
+2. `dbt_transform` consumes the window via `{{tasks.compute_window.values.start_date}}`.
+3. `commit_window` (`orchestration/commit_window.py`) writes the processed end date back to
+   `silver.dbt_window_state` — **only runs if `dbt_transform` succeeded**.
+
+The watermark is an explicit state table, not `max(event_date)` in a data table, precisely
+so a partial failure (silver committed, a gold model failed) does NOT advance it: the next
+run reprocesses the same window (replace_where is idempotent) instead of skipping it. The
+window is computed once, before any model runs, so silver and gold process the same week.
+Trigger the job repeatedly (or let the daily schedule fire) to walk the year a week at a
+time; once 2024 is done `compute_window` emits the 2999 sentinel and the run no-ops. To
+reprocess a specific window, trigger with the `start_date`/`end_date` job params set (this
+does not move the forward watermark). The schedule is defined but **PAUSED** — unpause when
+going live.
+
+### Migration & reprocessing caveats
+
+- **Switching an existing `materialized='table'` relation to incremental**: the old table
+  has no `event_date` column, so the first `replace_where` run would fail. The first run
+  after this change **must be `dbt run --full-refresh`** (drops & recreates with the new
+  schema), or drop the old tables first. Only relevant if silver/gold were already built;
+  a fresh first run creates them correctly.
+- **Reprocessing a window with *changed* data**: the LAG lookback reaches backward, not
+  forward, so re-running window W with corrected data does not refresh the first anomaly
+  in W+1 (which depended on W's last ping). NOAA files are immutable, so a reprocess
+  normally reproduces identical results. If you ever reprocess *corrected* data, also
+  reprocess the following window. In normal forward operation this never bites: each window
+  is built after the previous one, so boundaries are computed from already-final data.
+- **`dbt test` is not windowed**: generic tests (`not_null`, `accepted_values`) scan the
+  whole target relation regardless of `--vars`. On 2B-row tables that is a full scan, so
+  `dbt test` is **deliberately not in the scheduled `ais_dbt` job** (it runs `dbt run`
+  only). Run `dbt test` manually / on a full validation, or add window-aware `where` configs
+  before putting it back in the per-window schedule.
 
 ---
 

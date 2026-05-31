@@ -20,7 +20,7 @@ variables:
 resources:
   jobs:
 
-    # Runs hourly until all 2024 data is loaded (script exits cleanly when done)
+    # Runs hourly until all 2024 data is loaded; both ingestion scripts run in parallel
     ais_ingest:
       name: "AIS Ingest Bronze"
       schedule:
@@ -33,6 +33,12 @@ resources:
           spark_python_task:
             python_file: ${workspace.file_path}/ingestion/01_ingest_ais_bronze.py
           environment_key: default
+
+        - task_key: ingest_sanctions
+          spark_python_task:
+            python_file: ${workspace.file_path}/ingestion/02_ingest_sanctions_bronze.py
+          environment_key: default
+
       environments:
         - environment_key: default
           spec:
@@ -42,28 +48,71 @@ resources:
               - requests
               - pandas
 
-    # Run manually once bronze.ais_raw is fully loaded
-    ais_pipeline:
-      name: "AIS Anomaly Pipeline"
+    # Normal operation: runs daily and advances ONE 7-day window per run through 2024,
+    # starting from the max date already transformed into silver.ais_clean (mirrors the
+    # bronze ingestion). Trigger it repeatedly (or let the schedule fire daily) to walk
+    # the whole year a week at a time; once 2024 is fully transformed it no-ops.
+    # The schedule is PREPARED but PAUSED — flip pause_status to UNPAUSED when going live.
+    #
+    # Window resolution:
+    #   - compute_window reads the watermark and sets start_date/end_date task values
+    #   - to reprocess a specific window, trigger with the start_date/end_date job params set
+    ais_dbt:
+      name: "AIS dbt Transform"
+      schedule:
+        quartz_cron_expression: "0 0 6 * ? * *"
+        timezone_id: "UTC"
+        pause_status: PAUSED
+      parameters:
+        - name: start_date
+          default: ""
+        - name: end_date
+          default: ""
       tasks:
-        - task_key: ingest_sanctions
+        - task_key: compute_window
           spark_python_task:
-            python_file: ${workspace.file_path}/ingestion/02_ingest_sanctions_bronze.py
+            python_file: ${workspace.file_path}/orchestration/compute_window.py
+            parameters:
+              - "{{job.parameters.start_date}}"
+              - "{{job.parameters.end_date}}"
           environment_key: default
 
         - task_key: dbt_transform
           depends_on:
-            - task_key: ingest_sanctions
+            - task_key: compute_window
           dbt_task:
             project_directory: ${workspace.file_path}/dbt
+            # dbt test is intentionally NOT run here: generic tests (not_null,
+            # accepted_values) scan the whole persisted relation regardless of --vars, so
+            # running them every windowed run would full-scan the 2B-row tables. Run
+            # `dbt test` separately (manually or on a full validation), or add window-aware
+            # `where` configs before adding it back to the per-window schedule.
             commands:
-              - dbt run
+              - "dbt run --vars '{\"start_date\": \"{{tasks.compute_window.values.start_date}}\", \"end_date\": \"{{tasks.compute_window.values.end_date}}\"}'"
             warehouse_id: ${var.warehouse_id}
           environment_key: default
 
-        - task_key: ml_scoring
+        # Advances the watermark only after dbt_transform succeeds (Databricks starts this
+        # task only on upstream success), so a partial failure does not skip the window.
+        - task_key: commit_window
           depends_on:
             - task_key: dbt_transform
+          spark_python_task:
+            python_file: ${workspace.file_path}/orchestration/commit_window.py
+          environment_key: default
+
+      environments:
+        - environment_key: default
+          spec:
+            environment_version: "2"
+            dependencies:
+              - dbt-databricks
+
+    # Run manually after ais_dbt completes
+    ais_ml:
+      name: "AIS ML Scoring"
+      tasks:
+        - task_key: ml_scoring
           spark_python_task:
             python_file: ${workspace.file_path}/ml/isolation_forest.py
           environment_key: default
@@ -84,4 +133,3 @@ resources:
             dependencies:
               - scikit-learn
               - pandas
-              - dbt-databricks

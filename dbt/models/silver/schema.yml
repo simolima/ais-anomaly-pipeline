@@ -32,3 +32,7 @@ models:
           - accepted_values:
               values: [null]
               quote: false
+      - name: event_date
+        description: Date of base_date_time — partition/window key for incremental replace_where
+        tests:
+          - not_null
