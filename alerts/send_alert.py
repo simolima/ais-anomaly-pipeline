@@ -5,6 +5,7 @@ risk_score above a threshold, and emails an HTML summary of their behaviour. No 
 drill-down — the alert answers "which vessels should an analyst look at first".
 """
 
+import sys
 import smtplib
 from datetime import date
 from email.mime.multipart import MIMEMultipart
@@ -18,6 +19,12 @@ dbutils = DBUtils(spark)
 
 RISK_THRESHOLD = 0.7   # only alert on vessels at/above this risk_score
 TOP_N          = 20
+
+# Path to the recipients CSV. Passed explicitly as the first task parameter
+# (${workspace.file_path}/config/alert_recipients.csv) because the script cannot discover
+# its own location on Databricks — __file__ is undefined in the exec context. Falls back to
+# a repo-relative path for local runs.
+RECIPIENTS_CSV = sys.argv[1] if len(sys.argv) > 1 else "config/alert_recipients.csv"
 
 
 def _i(v):
@@ -83,13 +90,13 @@ plain = "\n".join(
     for _, r in vessels.iterrows()
 )
 
-# Recipients, sender and password come from the Databricks secret scope — no local file.
-# (The previous config/alert_recipients.csv was read via __file__, which is undefined in
-#  the Databricks exec context. ALERT_RECIPIENTS is a comma-separated list.)
-recipients = [a.strip() for a in
-              dbutils.secrets.get("ais_secrets", "ALERT_RECIPIENTS").split(",") if a.strip()]
-sender     = dbutils.secrets.get("ais_secrets", "ALERT_EMAIL_FROM")
-password   = dbutils.secrets.get("ais_secrets", "ALERT_EMAIL_PASSWORD")
+# Recipients come from the CSV (header line "email", then one address per line). Sender and
+# password stay in the Databricks secret scope — they must never live in a plaintext file.
+with open(RECIPIENTS_CSV) as f:
+    recipients = [l.strip() for l in f if l.strip() and l.strip().lower() != "email"]
+
+sender   = dbutils.secrets.get("ais_secrets", "ALERT_EMAIL_FROM")
+password = dbutils.secrets.get("ais_secrets", "ALERT_EMAIL_PASSWORD")
 
 msg = MIMEMultipart("alternative")
 msg["Subject"] = f"[AIS Alert] {len(vessels)} high-risk vessel{'s' if len(vessels) != 1 else ''} — {date.today()}"
