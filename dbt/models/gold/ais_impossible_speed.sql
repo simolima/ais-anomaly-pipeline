@@ -9,12 +9,11 @@
 -- Windowed incremental. event_date is anchored on the SECOND ping (event_end), which is
 -- always inside [start_date, end_date]; the first ping (event_start) may come from the
 -- lookback window.
-{% set has_window    = var('start_date', none) is not none %}
-{% set lookback_days = var('lookback_days', 7) %}
+{% set has_window   = var('start_date', none) is not none %}
 -- Apply the window on any incremental run (no vars -> default 2999-01-01 -> true no-op
 -- matching the replace_where predicate) and on a windowed/first build. Only a full build
 -- with no vars reads all history.
-{% set apply_window  = has_window or is_incremental() %}
+{% set apply_window = has_window or is_incremental() %}
 
 with window_rows as (
     select mmsi, vessel_name, base_date_time, latitude, longitude
@@ -25,7 +24,9 @@ with window_rows as (
 ),
 
 {% if apply_window %}
--- One prior ping per vessel strictly before the window (LAG only needs one row back).
+-- One prior ping per vessel strictly before the window, over ALL prior history
+-- (unbounded), so a position jump straddling the window boundary is still evaluated.
+-- LAG only needs one row back.
 prior_ping as (
     select mmsi, vessel_name, base_date_time, latitude, longitude
     from (
@@ -33,8 +34,7 @@ prior_ping as (
             mmsi, vessel_name, base_date_time, latitude, longitude,
             row_number() over (partition by mmsi order by base_date_time desc) as rn
         from {{ ref('ais_clean') }}
-        where event_date >= date_sub(date'{{ var("start_date", "2999-01-01") }}', {{ lookback_days }})
-          and event_date <  date'{{ var("start_date", "2999-01-01") }}'
+        where event_date < date'{{ var("start_date", "2999-01-01") }}'
     )
     where rn = 1
 ),

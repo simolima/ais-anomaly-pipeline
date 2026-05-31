@@ -212,8 +212,11 @@ Every silver/gold model is driven by an `event_date` window. With 2B+ rows in
   unchanged into `ais_anomaly_cues`. Never key on the gap/event *start* — it may sit in a
   prior window and `replace_where` would reject rows outside the predicate.
 - **Lookback**: the gold LAG models need only the single prior ping per vessel before the
-  window (LAG looks one row back). They recompute it from `ais_clean` over `lookback_days`
-  (default 7) — durable and reprocess-safe, no mutable state table.
+  window (LAG looks one row back). They recompute it from `ais_clean` over **all prior
+  history** (unbounded `event_date < start_date`) for full-history parity — durable and
+  reprocess-safe, no mutable state table. Cost: each windowed run scans the history before
+  the window to find that one prior ping; if this gets too heavy, cluster `ais_clean` by
+  `event_date` or introduce a per-vessel state table.
 - **Removed** the legacy global `no_retransmissions` dedup in `ais_clean`: it collapsed
   moored-vessel timelines and produced false dark gaps, and was globally scoped.
 
