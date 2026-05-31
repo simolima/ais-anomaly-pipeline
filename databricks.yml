@@ -48,23 +48,35 @@ resources:
               - requests
               - pandas
 
-    # Run manually after ais_ingest completes.
-    # Pass the window via job parameters; replace_where deletes+reinserts only [start,end].
-    # Defaults (2999-01-01) make a no-arg run a safe no-op — always set the dates.
+    # Normal operation: runs daily and processes a rolling last-7-days window
+    # (rolling_days=7), so late-arriving data and boundary anomalies are continuously
+    # refreshed (replace_where is idempotent). The schedule is PREPARED but PAUSED —
+    # flip pause_status to UNPAUSED when ready to go live.
+    #
+    # Window resolution (see dbt/macros/ais_window.sql):
+    #   - scheduled run        -> start_date/end_date empty, rolling_days=7  -> [today-7, today]
+    #   - manual reprocess     -> set start_date/end_date params             -> explicit window
+    # Empty string params count as "not set", so explicit dates override the rolling window.
     ais_dbt:
       name: "AIS dbt Transform"
+      schedule:
+        quartz_cron_expression: "0 0 6 * ? * *"
+        timezone_id: "UTC"
+        pause_status: PAUSED
       parameters:
+        - name: rolling_days
+          default: "7"
         - name: start_date
-          default: "2999-01-01"
+          default: ""
         - name: end_date
-          default: "2999-01-01"
+          default: ""
       tasks:
         - task_key: dbt_transform
           dbt_task:
             project_directory: ${workspace.file_path}/dbt
             commands:
-              - "dbt run  --vars '{\"start_date\": \"{{job.parameters.start_date}}\", \"end_date\": \"{{job.parameters.end_date}}\"}'"
-              - "dbt test --vars '{\"start_date\": \"{{job.parameters.start_date}}\", \"end_date\": \"{{job.parameters.end_date}}\"}'"
+              - "dbt run  --vars '{\"start_date\": \"{{job.parameters.start_date}}\", \"end_date\": \"{{job.parameters.end_date}}\", \"rolling_days\": \"{{job.parameters.rolling_days}}\"}'"
+              - "dbt test --vars '{\"start_date\": \"{{job.parameters.start_date}}\", \"end_date\": \"{{job.parameters.end_date}}\", \"rolling_days\": \"{{job.parameters.rolling_days}}\"}'"
             warehouse_id: ${var.warehouse_id}
           environment_key: default
 

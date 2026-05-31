@@ -220,18 +220,43 @@ Every silver/gold model is driven by an `event_date` window. With 2B+ rows in
 - **Removed** the legacy global `no_retransmissions` dedup in `ais_clean`: it collapsed
   moored-vessel timelines and produced false dark gaps, and was globally scoped.
 
+The window is resolved by the `ais_window()` macro (`dbt/macros/ais_window.sql`), in
+priority order: explicit `start_date`+`end_date` → `rolling_days` → no-op sentinel.
+
 ```bash
-# Windowed run / reprocess a window (delete+reinsert only those days):
+# Explicit window / reprocess (delete+reinsert only those days):
 dbt run  --vars '{start_date: 2024-03-01, end_date: 2024-03-07}'
 dbt test --vars '{start_date: 2024-03-01, end_date: 2024-03-07}'
 
-# Initial load: run successive windows (avoids a 2B-row full build).
+# Rolling window — the NORMAL scheduled mode: process the last N days [today-N, today]:
+dbt run  --vars '{rolling_days: 7}'
+
+# Initial load: run successive explicit windows (avoids a 2B-row full build).
 # Full rebuild (small datasets only): dbt run --full-refresh  (NO vars — never combine
 # --full-refresh with vars, it would wipe the table down to a single window).
 ```
 
-The `ais_dbt` job exposes `start_date` / `end_date` as job parameters. They default to
-`2999-01-01`, so a no-arg run is a **safe no-op** — always pass the dates when triggering.
+The `ais_dbt` job exposes `rolling_days` (default `7`) plus empty `start_date` / `end_date`
+params. **Scheduled runs use the rolling 7-day window**; setting the date params overrides
+it for a manual reprocess. The schedule is defined but **PAUSED** — unpause when going live.
+The daily 7-day overlap also keeps boundary anomalies fresh (see reprocessing caveat below).
+
+### Migration & reprocessing caveats
+
+- **Switching an existing `materialized='table'` relation to incremental**: the old table
+  has no `event_date` column, so the first `replace_where` run would fail. The first run
+  after this change **must be `dbt run --full-refresh`** (drops & recreates with the new
+  schema), or drop the old tables first. Only relevant if silver/gold were already built;
+  a fresh first run creates them correctly.
+- **Reprocessing a window with *changed* data**: the LAG lookback reaches backward, not
+  forward, so re-running window W with corrected data does not refresh the first anomaly
+  in W+1 (which depended on W's last ping). NOAA files are immutable, so a reprocess
+  normally reproduces identical results. If you ever reprocess *corrected* data, also
+  reprocess the following window. The rolling daily 7-day window mitigates this in normal
+  operation by re-deriving recent boundaries every day.
+- **`dbt test` is not windowed yet**: generic tests (`not_null`, `accepted_values`) scan
+  the whole target relation regardless of `--vars`. On 2B-row tables this is a full scan
+  each run — open item, window the tests with a `where` config if it becomes a problem.
 
 ---
 

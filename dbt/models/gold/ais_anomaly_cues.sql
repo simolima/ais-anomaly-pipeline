@@ -1,18 +1,18 @@
+{%- set win = ais_window() -%}
 {{ config(
     materialized='incremental',
     incremental_strategy='replace_where',
     incremental_predicates=[
-        "event_date >= date'" ~ var('start_date', '2999-01-01') ~ "' and event_date <= date'" ~ var('end_date', '2999-01-01') ~ "'"
+        "event_date >= date'" ~ win[0] ~ "' and event_date <= date'" ~ win[1] ~ "'"
     ]
 ) }}
 
+{%- set window_start = win[0] -%}
+{%- set window_end   = win[1] -%}
+{%- set has_window   = win[2] -%}
 -- Windowed incremental. event_date is carried up unchanged from the gold anomaly tables
 -- (date of the in-window detecting ping), so the same window predicate applies cleanly.
-{% set has_window = var('start_date', none) is not none %}
--- Apply the window on any incremental run (no vars -> default 2999-01-01 -> true no-op
--- matching the replace_where predicate) and on a windowed/first build. Only a full build
--- with no vars reads all history.
-{% set apply_window = has_window or is_incremental() %}
+{%- set apply_window = has_window or is_incremental() -%}
 
 with dark_gaps as (
     select
@@ -25,7 +25,7 @@ with dark_gaps as (
         anomaly_score
     from {{ ref('ais_dark_gaps') }}
     {% if apply_window %}
-    where event_date between date'{{ var("start_date", "2999-01-01") }}' and date'{{ var("end_date", "2999-01-01") }}'
+    where event_date between date'{{ window_start }}' and date'{{ window_end }}'
     {% endif %}
 ),
 
@@ -40,7 +40,7 @@ impossible_speeds as (
         anomaly_score
     from {{ ref('ais_impossible_speed') }}
     {% if apply_window %}
-    where event_date between date'{{ var("start_date", "2999-01-01") }}' and date'{{ var("end_date", "2999-01-01") }}'
+    where event_date between date'{{ window_start }}' and date'{{ window_end }}'
     {% endif %}
 ),
 
