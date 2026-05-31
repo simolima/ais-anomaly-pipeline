@@ -9,6 +9,10 @@
 -- Windowed incremental. event_date is carried up unchanged from the gold anomaly tables
 -- (date of the in-window detecting ping), so the same window predicate applies cleanly.
 {% set has_window = var('start_date', none) is not none %}
+-- Apply the window on any incremental run (no vars -> default 2999-01-01 -> true no-op
+-- matching the replace_where predicate) and on a windowed/first build. Only a full build
+-- with no vars reads all history.
+{% set apply_window = has_window or is_incremental() %}
 
 with dark_gaps as (
     select
@@ -20,8 +24,8 @@ with dark_gaps as (
         anomaly_type,
         anomaly_score
     from {{ ref('ais_dark_gaps') }}
-    {% if has_window %}
-    where event_date between date'{{ var("start_date") }}' and date'{{ var("end_date") }}'
+    {% if apply_window %}
+    where event_date between date'{{ var("start_date", "2999-01-01") }}' and date'{{ var("end_date", "2999-01-01") }}'
     {% endif %}
 ),
 
@@ -35,8 +39,8 @@ impossible_speeds as (
         anomaly_type,
         anomaly_score
     from {{ ref('ais_impossible_speed') }}
-    {% if has_window %}
-    where event_date between date'{{ var("start_date") }}' and date'{{ var("end_date") }}'
+    {% if apply_window %}
+    where event_date between date'{{ var("start_date", "2999-01-01") }}' and date'{{ var("end_date", "2999-01-01") }}'
     {% endif %}
 ),
 

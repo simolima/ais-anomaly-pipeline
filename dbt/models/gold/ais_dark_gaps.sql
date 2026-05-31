@@ -9,18 +9,22 @@
 -- Windowed incremental. event_date is anchored on the REAPPEARANCE ping (gap_end),
 -- which is always inside [start_date, end_date]; the gap_start may live in a prior
 -- window and is only supplied as lookback context (never re-emitted).
-{% set has_window  = var('start_date', none) is not none %}
+{% set has_window    = var('start_date', none) is not none %}
 {% set lookback_days = var('lookback_days', 7) %}
+-- Apply the window on any incremental run (no vars -> default 2999-01-01 -> true no-op
+-- matching the replace_where predicate) and on a windowed/first build. Only a full build
+-- with no vars reads all history.
+{% set apply_window  = has_window or is_incremental() %}
 
 with window_rows as (
     select mmsi, vessel_name, base_date_time, latitude, longitude
     from {{ ref('ais_clean') }}
-    {% if has_window %}
-    where event_date between date'{{ var("start_date") }}' and date'{{ var("end_date") }}'
+    {% if apply_window %}
+    where event_date between date'{{ var("start_date", "2999-01-01") }}' and date'{{ var("end_date", "2999-01-01") }}'
     {% endif %}
 ),
 
-{% if has_window %}
+{% if apply_window %}
 -- The single most recent ping per vessel strictly BEFORE the window (bounded lookback),
 -- so a gap straddling the window boundary is still detected. LAG only looks one row back,
 -- so one prior ping per vessel is sufficient.
@@ -31,8 +35,8 @@ prior_ping as (
             mmsi, vessel_name, base_date_time, latitude, longitude,
             row_number() over (partition by mmsi order by base_date_time desc) as rn
         from {{ ref('ais_clean') }}
-        where event_date >= date_sub(date'{{ var("start_date") }}', {{ lookback_days }})
-          and event_date <  date'{{ var("start_date") }}'
+        where event_date >= date_sub(date'{{ var("start_date", "2999-01-01") }}', {{ lookback_days }})
+          and event_date <  date'{{ var("start_date", "2999-01-01") }}'
     )
     where rn = 1
 ),
@@ -71,11 +75,11 @@ gaps as (
     from vessel_timeline
     where prev_ts is not null
       and timestampdiff(hour, prev_ts, base_date_time) >= 6
-      {% if has_window %}
+      {% if apply_window %}
       -- only emit gaps whose reappearance falls in the window, so the prior_ping rows
       -- (outside the window) never produce a duplicate anomaly
       and cast(base_date_time as date)
-          between date'{{ var("start_date") }}' and date'{{ var("end_date") }}'
+          between date'{{ var("start_date", "2999-01-01") }}' and date'{{ var("end_date", "2999-01-01") }}'
       {% endif %}
 )
 

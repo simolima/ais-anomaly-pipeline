@@ -11,12 +11,16 @@
 --   * Windowed run:     dbt run --vars '{start_date: X, end_date: Y}'  (replace_where on [X,Y])
 -- A windowed run atomically deletes+reinserts only the days in [start_date, end_date].
 {% set has_window = var('start_date', none) is not none %}
+-- Apply the window filter on any incremental run (with no vars the default 2999-01-01
+-- range makes the run a true no-op that matches the replace_where predicate) and on a
+-- windowed/first build. Only a full build with no vars reads all history.
+{% set apply_window = has_window or is_incremental() %}
 
 with source as (
     select * from {{ source('bronze', 'ais_raw') }}
-    {% if has_window %}
+    {% if apply_window %}
     where cast(base_date_time as date)
-          between date'{{ var("start_date") }}' and date'{{ var("end_date") }}'
+          between date'{{ var("start_date", "2999-01-01") }}' and date'{{ var("end_date", "2999-01-01") }}'
     {% endif %}
 ),
 
