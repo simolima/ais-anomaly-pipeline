@@ -2,6 +2,9 @@ version: 2
 
 sources:
   - name: bronze
+    # Same reason as +database in dbt_project.yml: pin the catalog so source reads resolve
+    # to workspace.bronze.* and never fall back to the disabled hive_metastore on the job.
+    database: workspace
     schema: bronze
     tables:
       - name: ais_raw
