@@ -10,6 +10,11 @@ clean-targets: ["target", "dbt_packages"]
 
 models:
   ais_anomaly_pipeline:
+    # Pin the Unity Catalog catalog explicitly. The Databricks dbt task generates its own
+    # profiles.yml (target 'databricks_cluster') that does NOT set a catalog, so it falls
+    # back to the disabled hive_metastore. Setting +database here forces 'workspace' for
+    # every model regardless of the connection default. (Local dev already uses workspace.)
+    +database: workspace
     # Materialization is set per-model (incremental, replace_where) — see the model files.
     silver:
       +schema: silver
