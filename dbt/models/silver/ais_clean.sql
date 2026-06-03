@@ -18,7 +18,7 @@
 -- Apply the window on any incremental run (no vars -> default 2999-01-01 -> true no-op
 -- matching the replace_where predicate) and on a windowed/first build. Only a full build
 -- with no vars reads all history.
-{%- set apply_window = has_window or is_incremental() -%}
+{% set apply_window = has_window or is_incremental() %}
 
 with source as (
     select * from {{ source('bronze', 'ais_raw') }}
