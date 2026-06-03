@@ -50,13 +50,12 @@ resources:
               - requests
               - pandas
 
-    # Normal operation: runs every 4 hours and advances ONE 7-day window per run through
-    # 2024, starting from the watermark in silver.dbt_window_state (advanced only by
+    # Normal operation: runs HOURLY and advances ONE 7-day window per run through 2024,
+    # starting from the watermark in silver.dbt_window_state (advanced only by
     # commit_window after dbt_transform succeeds). Walks the whole year a week at a time;
     # once 2024 is fully transformed compute_window emits the 2999 sentinel and it no-ops.
-    # At every-4h pace the full year backfills in ~9 days (52 windows).
-    # The schedule is PREPARED but PAUSED — flip pause_status to UNPAUSED after the manual
-    # test run confirms it works.
+    # At hourly pace the full year backfills in ~52 runs (~2 days); each run is ~5 min.
+    # UNPAUSED: week 1 was validated manually, so the backfill is live.
     #
     # Window resolution:
     #   - compute_window reads the watermark and sets start_date/end_date task values
@@ -64,9 +63,9 @@ resources:
     ais_dbt:
       name: "AIS dbt Transform"
       schedule:
-        quartz_cron_expression: "0 0 0/4 ? * *"
+        quartz_cron_expression: "0 0 * ? * *"
         timezone_id: "UTC"
-        pause_status: PAUSED
+        pause_status: UNPAUSED
       parameters:
         - name: start_date
           default: ""
