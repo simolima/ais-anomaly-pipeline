@@ -12,7 +12,7 @@
 {%- set has_window   = win[2] -%}
 -- Windowed incremental. event_date is carried up unchanged from the gold anomaly tables
 -- (date of the in-window detecting ping), so the same window predicate applies cleanly.
-{%- set apply_window = has_window or is_incremental() -%}
+{% set apply_window = has_window or is_incremental() %}
 
 with dark_gaps as (
     select
