@@ -86,6 +86,14 @@ resources:
             - task_key: compute_window
           dbt_task:
             project_directory: ${workspace.file_path}/dbt
+            # Make Databricks generate the dbt profiles.yml WITH a catalog. Without this the
+            # generated profile (target 'databricks_cluster') has no catalog, so the session
+            # default falls back to the disabled hive_metastore: unqualified ops (schema
+            # creation, metadata lookups) then fail with UC_HIVE_METASTORE_DISABLED even
+            # though every relation is pinned to workspace via +database. Pinning relations
+            # is necessary but NOT sufficient — the session default catalog must be set too.
+            catalog: workspace
+            schema: bronze
             # dbt test is intentionally NOT run here: generic tests (not_null,
             # accepted_values) scan the whole persisted relation regardless of --vars, so
             # running them every windowed run would full-scan the 2B-row tables. Run
