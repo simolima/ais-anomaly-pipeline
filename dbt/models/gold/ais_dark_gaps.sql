@@ -13,7 +13,7 @@
 {%- set window_start = win[0] -%}
 {%- set window_end   = win[1] -%}
 {%- set has_window   = win[2] -%}
-{%- set apply_window = has_window or is_incremental() -%}
+{% set apply_window = has_window or is_incremental() %}
 
 with window_rows as (
     select mmsi, vessel_name, base_date_time, latitude, longitude
