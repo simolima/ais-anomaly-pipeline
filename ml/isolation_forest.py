@@ -40,6 +40,20 @@ if df.empty:
 
 X = df[FEATURES].fillna(0).astype(float)
 
+# Defense-in-depth against heavy-tailed data-quality artefacts. gold.vessel_features already
+# drops implausible impossible-speed events, but cap here too so a single residual extreme
+# (a millions-of-knots implied speed from a near-zero dt, or a months-long coverage-edge
+# "dark gap") can't dominate the standardized feature space and force the model to rank that
+# one vessel as the sole outlier. Caps are physical sanity ceilings, not tuned thresholds.
+CAPS = {
+    "max_implied_speed": 90.0,    # kn — above this is a measurement error, not a vessel
+    "max_jump_nm":       60.0,    # nm between consecutive pings
+    "max_gap_hours":     720.0,   # 30 days — longer is a coverage gap, not AIS-dark
+    "avg_gap_hours":     720.0,
+}
+for col, cap in CAPS.items():
+    X[col] = X[col].clip(upper=cap)
+
 scaler   = StandardScaler()
 X_scaled = scaler.fit_transform(X)
 

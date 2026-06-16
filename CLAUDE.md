@@ -135,16 +135,24 @@ databricks.yml              — Asset Bundle: two jobs defined
 
 ## Databricks jobs (databricks.yml)
 
-Two separate jobs — do not merge them:
+Three separate jobs — do not merge them. **The 2024 backfill is complete**, so all three
+are now **manual-only (no schedule)**; trigger them by hand for a refresh or reprocess.
 
-**`ais_ingest`** — runs hourly, `max_concurrent_runs: 1`
-- Task: `ingest_ais` only
-- Processes next 7-day window of AIS data
-- Exits cleanly with `sys.exit(0)` when all 2024 data is loaded
+**`ais_ingest`** — `max_concurrent_runs: 1`
+- Tasks: `ingest_ais` + `ingest_sanctions` (run in parallel)
+- Each run processes the next 7-day window of AIS data; exits cleanly with `sys.exit(0)`
+  when all 2024 data is loaded
+- Re-run only to refresh `bronze.sanctions` (overwrite) or backfill a missing AIS window
 
-**`ais_pipeline`** — no schedule, run manually
-- Tasks: `ingest_sanctions` → `dbt_transform` → `ml_scoring` → `send_alert`
+**`ais_dbt`** — `compute_window` → `dbt_transform` → `commit_window`
+- Walks one 7-day window per run via the `silver.dbt_window_state` watermark (see below)
+- Now no-ops (2999 sentinel) since all 2024 windows are transformed; trigger with
+  `start_date`/`end_date` job params to reprocess a specific window
 - Run only after `bronze.ais_raw` is fully loaded
+
+**`ais_ml`** — `ml_scoring` → `send_alert`
+- Isolation Forest → `gold.vessel_risk_scores`, then emails the top-N vessels
+- Run only after `ais_dbt` has completed
 
 ---
 
@@ -251,11 +259,13 @@ The watermark is an explicit state table, not `max(event_date)` in a data table,
 so a partial failure (silver committed, a gold model failed) does NOT advance it: the next
 run reprocesses the same window (replace_where is idempotent) instead of skipping it. The
 window is computed once, before any model runs, so silver and gold process the same week.
-Trigger the job repeatedly (or let the daily schedule fire) to walk the year a week at a
-time; once 2024 is done `compute_window` emits the 2999 sentinel and the run no-ops. To
-reprocess a specific window, trigger with the `start_date`/`end_date` job params set (this
-does not move the forward watermark). The schedule is defined but **PAUSED** — unpause when
-going live.
+Trigger the job repeatedly to walk the year a week at a time; once 2024 is done
+`compute_window` emits the 2999 sentinel and the run no-ops. To reprocess a specific window,
+trigger with the `start_date`/`end_date` job params set (this does not move the forward
+watermark). **The 2024 backfill is complete, so the job has no schedule — it is manual-only.**
+`commit_window` skips the watermark write on a no-op/reprocess (`advance != "true"`) via
+plain control flow, not `raise SystemExit(0)`, so the no-op run shows as succeeded rather
+than a spurious "Workload failed" in the Databricks IPython context.
 
 ### Migration & reprocessing caveats
 
