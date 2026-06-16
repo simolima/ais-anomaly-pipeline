@@ -17,6 +17,15 @@ with dark as (
     group by mmsi
 ),
 
+-- Data-quality guard: ais_impossible_speed flags everything > 30 kn, but a large share of
+-- those rows are artefacts, not vessels actually moving fast — two pings ~1 s apart (dt in
+-- the denominator -> millions of knots) or a garbage position (0,0 / sentinel) producing a
+-- thousand-nm "jump" in one second. Those inflate n_impossible_speed / max_implied_speed /
+-- max_jump_nm and let the Isolation Forest rank stationary infrastructure (oil rigs,
+-- dredges) and bad transponders at the top. Keep only a physically plausible band: above
+-- ~50 kn is already faster than almost any real ship, 90 kn is a generous hard ceiling;
+-- anything above that is a measurement error, not an anomaly. This re-derives clean
+-- features from the already-persisted detail rows — no need to reprocess the windowed model.
 speed as (
     select
         mmsi,
@@ -25,6 +34,7 @@ speed as (
         max(distance_nm)         as max_jump_nm,
         max(anomaly_score)       as max_speed_score
     from {{ ref('ais_impossible_speed') }}
+    where implied_speed_knots <= 90
     group by mmsi
 ),
 
@@ -73,3 +83,10 @@ left join dark        d  on v.mmsi = d.mmsi
 left join speed       s  on v.mmsi = s.mmsi
 left join names       n  on v.mmsi = n.mmsi
 left join sanctioned  sa on v.mmsi = sa.mmsi
+-- Keep only well-formed ship MMSIs. A valid ship identity is 9 digits with a leading MID
+-- digit 2-7; the other ranges are not independent vessels and pollute the ranking:
+--   0xx = base/coast station, 1xx = SAR aircraft, 8xx = handheld/directional,
+--   98x = craft associated with a parent ship, 99x = aid to navigation (e.g. rig markers).
+-- Also drops obvious placeholders like 123456789. mmsi is StringType (kept for joins).
+where length(v.mmsi) = 9
+  and substring(v.mmsi, 1, 1) between '2' and '7'

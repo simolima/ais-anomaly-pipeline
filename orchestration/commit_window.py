@@ -26,17 +26,20 @@ advance = dbutils.jobs.taskValues.get(
 end_str = dbutils.jobs.taskValues.get(
     taskKey="compute_window", key="end_date", default="", debugValue="")
 
+# Skip the watermark write for explicit reprocess runs and the past-2024 no-op
+# (advance != "true"). Use normal control flow rather than `raise SystemExit(0)`: in the
+# Databricks Serverless IPython context a raised SystemExit — even with code 0 — is caught
+# by the REPL and surfaced as "Workload failed", making a clean no-op look like an error.
 if advance != "true" or not end_str:
     print(f"Watermark not advanced (advance={advance!r}, end={end_str!r}).")
-    raise SystemExit(0)
+else:
+    spark.sql("CREATE DATABASE IF NOT EXISTS silver")
 
-spark.sql("CREATE DATABASE IF NOT EXISTS silver")
+    # Single-row state table, overwritten each successful window.
+    (
+        spark.createDataFrame([(date.fromisoformat(end_str),)], "last_end date")
+        .withColumn("_updated_at", current_timestamp())
+        .write.format("delta").mode("overwrite").saveAsTable(STATE_TABLE)
+    )
 
-# Single-row state table, overwritten each successful window.
-(
-    spark.createDataFrame([(date.fromisoformat(end_str),)], "last_end date")
-    .withColumn("_updated_at", current_timestamp())
-    .write.format("delta").mode("overwrite").saveAsTable(STATE_TABLE)
-)
-
-print(f"Watermark advanced to {end_str}.")
+    print(f"Watermark advanced to {end_str}.")

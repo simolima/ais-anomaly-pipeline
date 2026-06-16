@@ -20,15 +20,12 @@ variables:
 resources:
   jobs:
 
-    # All 2024 bronze data is loaded — schedule PAUSED. Re-run manually only to refresh
-    # bronze.sanctions (overwrite) or to backfill any missing AIS window.
-    # Each run advances one 7-day window; both ingestion scripts run in parallel.
+    # All 2024 bronze data is loaded — the backfill is complete, so there is no schedule:
+    # this is now a manual-only job. Re-run manually only to refresh bronze.sanctions
+    # (overwrite) or to backfill any missing AIS window. Each run advances one 7-day window;
+    # both ingestion scripts run in parallel.
     ais_ingest:
       name: "AIS Ingest Bronze"
-      schedule:
-        quartz_cron_expression: "0 0 0/6 ? * *"
-        timezone_id: "UTC"
-        pause_status: PAUSED
       max_concurrent_runs: 1
       tasks:
         - task_key: ingest_ais
@@ -50,23 +47,14 @@ resources:
               - requests
               - pandas
 
-    # Normal operation: runs every 4 hours and advances ONE 7-day window per run through
-    # 2024, starting from the watermark in silver.dbt_window_state (advanced only by
-    # commit_window after dbt_transform succeeds). Walks the whole year a week at a time;
-    # once 2024 is fully transformed compute_window emits the 2999 sentinel and it no-ops.
-    # At every-4h pace the full year backfills in ~9 days (52 windows).
-    # The schedule is PREPARED but PAUSED — flip pause_status to UNPAUSED after the manual
-    # test run confirms it works.
-    #
-    # Window resolution:
-    #   - compute_window reads the watermark and sets start_date/end_date task values
-    #   - to reprocess a specific window, trigger with the start_date/end_date job params set
+    # All 2024 windows are transformed (the watermark in silver.dbt_window_state is past
+    # 2024-12-31), so the backfill walk is done and there is no schedule — this is now a
+    # manual-only job. compute_window now emits the 2999 sentinel and the run no-ops, so a
+    # scheduled run would only burn compute doing nothing. Trigger manually to reprocess a
+    # specific window with the start_date/end_date job params set; compute_window reads the
+    # watermark and sets the start_date/end_date task values when no params are given.
     ais_dbt:
       name: "AIS dbt Transform"
-      schedule:
-        quartz_cron_expression: "0 0 0/4 ? * *"
-        timezone_id: "UTC"
-        pause_status: PAUSED
       parameters:
         - name: start_date
           default: ""
