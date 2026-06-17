@@ -17,15 +17,22 @@ with dark as (
     group by mmsi
 ),
 
--- Data-quality guard: ais_impossible_speed flags everything > 30 kn, but a large share of
--- those rows are artefacts, not vessels actually moving fast — two pings ~1 s apart (dt in
--- the denominator -> millions of knots) or a garbage position (0,0 / sentinel) producing a
--- thousand-nm "jump" in one second. Those inflate n_impossible_speed / max_implied_speed /
--- max_jump_nm and let the Isolation Forest rank stationary infrastructure (oil rigs,
--- dredges) and bad transponders at the top. Keep only a physically plausible band: above
--- ~50 kn is already faster than almost any real ship, 90 kn is a generous hard ceiling;
--- anything above that is a measurement error, not an anomaly. This re-derives clean
--- features from the already-persisted detail rows — no need to reprocess the windowed model.
+-- Data-quality guard. ais_impossible_speed flags every implied speed > 30 kn, but most of
+-- those rows are NOT vessels moving fast — they are artefacts of the implied-speed formula
+-- (distance / dt) on noisy data:
+--   * GPS jitter: two pings ~seconds apart with a sub-nm position wiggle -> huge implied
+--     speed but no real movement (this produced the original millions-of-knots);
+--   * fast ferries (SeaStreak, Catalina, Key West Express…) cruising at 35-45 kn -> they
+--     trip the 30 kn rule on every ping and, pinging constantly, rack up tens of thousands
+--     of events that drown real anomalies in the count;
+--   * bad positions (0,0 / sentinel coord) -> a thousand-nm "jump" in one step.
+-- DISTANCE is the clean discriminator, not implied speed (which is confounded: both jitter
+-- and a real teleport read as high speed). A genuine AIS spoof/teleport is a LARGE but
+-- bounded position jump at a physically impossible speed — keep only those:
+--   distance_nm between 2 and 500  -> excludes jitter (<2 nm) and bad positions (>500 nm)
+--   implied_speed_knots > 50       -> excludes ferry cruise (no real ship covers a multi-nm
+--                                     jump at >50 kn)
+-- Re-derives clean features from the already-persisted detail rows — no backfill needed.
 speed as (
     select
         mmsi,
@@ -34,7 +41,8 @@ speed as (
         max(distance_nm)         as max_jump_nm,
         max(anomaly_score)       as max_speed_score
     from {{ ref('ais_impossible_speed') }}
-    where implied_speed_knots <= 90
+    where distance_nm between 2 and 500
+      and implied_speed_knots > 50
     group by mmsi
 ),
 
@@ -56,10 +64,29 @@ names as (
     group by mmsi
 ),
 
+-- Corroborated sanctions match. Matching on MMSI ALONE produces false positives because
+-- MMSIs get reassigned/reused when a vessel changes flag or transponder (the IMO number is
+-- the permanent hull identity; the MMSI is not, and AIS transmits the MMSI). In this dataset
+-- all 5 MMSI hits were collisions (e.g. MMSI 249256000 is OFAC-listed 'SINA', flag Panama,
+-- but actually transmits as 'LUIGI GALVANI', a legitimate Malta-flagged LPG tanker,
+-- IMO 9738246 — verified against vessel registries). A real hit needs a second key to agree.
+-- IMO would be strongest but the OpenSanctions vessel pull carries no IMO here, so corroborate
+-- on the vessel NAME (normalised: upper-case, strip non-alphanumerics).
+--   is_sanctioned           = confirmed: MMSI AND name agree
+--   sanctions_mmsi_only_hit = MMSI matched but name did not = likely collision; surface as
+--                             "to investigate", never as a confirmed alert.
 sanctioned as (
-    select distinct mmsi, 1 as is_sanctioned
-    from {{ source('bronze', 'sanctions') }}
-    where mmsi is not null
+    select
+        n.mmsi,
+        max(case
+            when regexp_replace(upper(trim(s.entity_name)), '[^A-Z0-9]', '')
+               = regexp_replace(upper(trim(n.vessel_name)),  '[^A-Z0-9]', '')
+            then 1 else 0 end)                        as is_sanctioned,
+        1                                             as sanctions_mmsi_only_hit
+    from {{ source('bronze', 'sanctions') }} s
+    join names n on s.mmsi = n.mmsi
+    where s.mmsi is not null
+    group by n.mmsi
 )
 
 select
@@ -77,7 +104,8 @@ select
         coalesce(d.max_dark_score, 0),
         coalesce(s.max_speed_score, 0)
     )                                     as max_anomaly_score,
-    coalesce(sa.is_sanctioned, 0)         as is_sanctioned
+    coalesce(sa.is_sanctioned, 0)            as is_sanctioned,
+    coalesce(sa.sanctions_mmsi_only_hit, 0)  as sanctions_mmsi_only_hit
 from vessels v
 left join dark        d  on v.mmsi = d.mmsi
 left join speed       s  on v.mmsi = s.mmsi
