@@ -46,8 +46,9 @@ X = df[FEATURES].fillna(0).astype(float)
 # "dark gap") can't dominate the standardized feature space and force the model to rank that
 # one vessel as the sole outlier. Caps are physical sanity ceilings, not tuned thresholds.
 CAPS = {
-    "max_implied_speed": 90.0,    # kn — above this is a measurement error, not a vessel
-    "max_jump_nm":       60.0,    # nm between consecutive pings
+    "max_implied_speed": 200.0,   # kn — any value this high is already "impossible"; a real
+                                  #      teleport can read thousands, but the magnitude is noise
+    "max_jump_nm":       500.0,   # nm — matches the upper bound of the vessel_features filter
     "max_gap_hours":     720.0,   # 30 days — longer is a coverage gap, not AIS-dark
     "avg_gap_hours":     720.0,
 }
